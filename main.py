@@ -51,24 +51,44 @@ class SplicingGUI:
         
         ttk.Label(self.left_panel, text="控制面板 (Control Panel)", font=("Helvetica", 16, "bold")).pack(pady=10)
         
-        btn_load_single = ttk.Button(self.left_panel, text="載入單張照片", bootstyle=PRIMARY, command=self.load_image)
-        btn_load_single.pack(fill=X, pady=5)
+        # Center Frame for Buttons (Prevents stretching)
+        btn_container = ttk.Frame(self.left_panel)
+        btn_container.pack(pady=10)
+        
+        # Define a consistent width for all buttons
+        BTN_WIDTH = 25
+        
+        btn_load_single = ttk.Button(btn_container, text="📂 載入單張照片", width=BTN_WIDTH, bootstyle=PRIMARY, command=self.load_image)
+        btn_load_single.pack(pady=5)
         ToolTip(btn_load_single, text="選擇單個圖片檔案進行分析")
         
-        btn_load_folder = ttk.Button(self.left_panel, text="載入資料夾", bootstyle=SECONDARY, command=self.load_folder)
-        btn_load_folder.pack(fill=X, pady=5)
+        btn_load_folder = ttk.Button(btn_container, text="📁 載入資料夾", width=BTN_WIDTH, bootstyle=SECONDARY, command=self.load_folder)
+        btn_load_folder.pack(pady=5)
         ToolTip(btn_load_folder, text="選擇一個資料夾進行批次分析")
         
-        self.analyze_btn = ttk.Button(self.left_panel, text="開始分析", bootstyle=SUCCESS, command=self.start_analysis)
-        self.analyze_btn.pack(fill=X, pady=10)
-        ToolTip(self.analyze_btn, text="開始對目前載入的照片執行拼接分析流程")
+        self.analyze_btn = ttk.Button(btn_container, text="🚀 開始分析", width=BTN_WIDTH, bootstyle=SUCCESS, command=self.start_analysis)
+        self.analyze_btn.pack(pady=15)
+        ToolTip(self.analyze_btn, text="開始執行拼接分析流程")
         
-        self.clear_log_btn = ttk.Button(self.left_panel, text="清空日誌記錄", bootstyle=LIGHT, command=self.clear_log)
-        self.clear_log_btn.pack(fill=X, pady=5)
-        ToolTip(self.clear_log_btn, text="清除左側日誌區域的所有內容")
+        # Log Control Buttons (Horizontal row)
+        log_btn_frame = ttk.Frame(btn_container)
+        log_btn_frame.pack(fill=X, pady=5)
         
-        self.log_area = ttk.ScrolledText(self.left_panel, width=30, height=20, font=("Consolas", 10))
-        self.log_area.pack(fill=BOTH, expand=YES, pady=10)
+        self.copy_log_btn = ttk.Button(log_btn_frame, text="📋 複製日誌", width=11, bootstyle=INFO, command=self.copy_log)
+        self.copy_log_btn.pack(side=LEFT, padx=2)
+        ToolTip(self.copy_log_btn, text="將日誌內容複製到剪貼簿")
+        
+        self.clear_log_btn = ttk.Button(log_btn_frame, text="🗑️ 清空日誌", width=11, bootstyle=DANGER, command=self.clear_log)
+        self.clear_log_btn.pack(side=RIGHT, padx=2)
+        ToolTip(self.clear_log_btn, text="清除所有日誌文字")
+        
+        ttk.Separator(self.left_panel, orient=HORIZONTAL).pack(fill=X, pady=10)
+        
+        self.log_area = ttk.ScrolledText(self.left_panel, width=30, height=15, font=("Consolas", 10))
+        self.log_area.pack(fill=BOTH, expand=YES, pady=5)
+        # Setup tags for coloring PASS/FAIL results
+        self.log_area.tag_config("pass_text", foreground="#00FF00", font=("Consolas", 10, "bold"))
+        self.log_area.tag_config("fail_text", foreground="#FF0000", font=("Consolas", 10, "bold"))
         
         # Debug ROI Preview
         self.roi_preview_label = ttk.Label(self.left_panel, text="目標區塊預覽 (Target ROI Preview)", font=("Helvetica", 10, "bold"))
@@ -193,7 +213,16 @@ class SplicingGUI:
 
     def log(self, message):
         def _log():
+            # Get current end position before insertion
+            start_pos = self.log_area.index("end-1c")
             self.log_area.insert(END, message + "\n")
+            
+            # Apply color tags based on content
+            if "PASS" in message or "[OK]" in message:
+                self.log_area.tag_add("pass_text", start_pos, "end-1c")
+            elif "FAIL" in message or "[NG]" in message:
+                self.log_area.tag_add("fail_text", start_pos, "end-1c")
+                
             self.log_area.see(END)
         self.root.after(0, _log)
 
@@ -210,6 +239,15 @@ class SplicingGUI:
 
     def clear_log(self):
         self.log_area.delete('1.0', END)
+
+    def copy_log(self):
+        try:
+            content = self.log_area.get('1.0', END)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(content)
+            self.status_var.set("日誌已複製到剪貼簿")
+        except Exception as e:
+            self.log(f"複製失敗: {str(e)}")
 
     def load_pil_image(self, path):
         try:
@@ -285,38 +323,21 @@ class SplicingGUI:
                 if status == 'pass': color = "#00FF00"
                 if status == 'fail': color = "#FF0000"
                 
-                if rect:
-                    rx1, ry1, rx2, ry2 = rect
-                    rx1 = int(rx1 * ratio)
-                    ry1 = int(ry1 * ratio)
-                    rx2 = int(rx2 * ratio)
-                    ry2 = int(ry2 * ratio)
-                    
-                    if (rx2 - rx1) < 20: rx1, rx2 = rx1 - 10, rx2 + 10
-                    if (ry2 - ry1) < 20: ry1, ry2 = ry1 - 10, ry2 + 10
-
-                    for i in range(4):
-                        draw.rectangle([rx1-i, ry1-i, rx2+i, ry2+i], outline=color)
-                    draw.text((rx1, ry1 - 30), status_text, fill=color)
-
                 # Giant Final Result Overlay
                 final_res = overlay_info.get('final_result')
                 if final_res:
                     # Draw semi-transparent black overlay
-                    overlay_rect = [0, 0, new_w, new_h]
-                    overlay_layer = Image.new('RGBA', (new_w, new_h), (0, 0, 0, 200)) # Black with transparency
+                    overlay_layer = Image.new('RGBA', (new_w, new_h), (0, 0, 0, 200))
                     img_resized.paste(overlay_layer, (0, 0), overlay_layer)
                     
-                    # Draw Big Text
+                    # Need to rebuild draw object after paste
                     draw = ImageDraw.Draw(img_resized)
                     res_text = "PASS" if final_res == 'pass' else "FAIL"
                     res_color = "#00FF00" if final_res == 'pass' else "#FF0000"
                     
-                    # Try to use a large font, fallback to default if not found
                     try:
                         from PIL import ImageFont
-                        # Attempt to find a font on Windows
-                        font_paths = ["C:\\Windows\\Fonts\\arialbd.ttf", "C:\\Windows\\Fonts\\msjh.ttc", "arial.ttf"]
+                        font_paths = ["C:\\Windows\\Fonts\\arialbd.ttf", "arial.ttf"]
                         font = None
                         for fp in font_paths:
                             if os.path.exists(fp):
@@ -327,8 +348,56 @@ class SplicingGUI:
                         font = None
                     
                     # Center text
-                    tw, th = draw.textsize(res_text, font=font) if hasattr(draw, 'textsize') else (400, 200)
+                    try:
+                        tw, th = draw.textsize(res_text, font=font) if hasattr(draw, 'textsize') else (400, 200)
+                    except:
+                        # Fallback for newer Pillow
+                        bbox = draw.textbbox((0, 0), res_text, font=font)
+                        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
                     draw.text(((new_w - tw)//2, (new_h - th)//2), res_text, fill=res_color, font=font)
+                
+                else:
+                    # Regular per-target status text - Scale font size with image
+                    try:
+                        from PIL import ImageFont
+                        # Make scanning text bigger as requested
+                        font_size = max(28, int(50 * ratio))
+                        target_font = None
+                        font_paths = ["C:\\Windows\\Fonts\\arialbd.ttf", "arial.ttf"]
+                        for fp in font_paths:
+                            if os.path.exists(fp):
+                                target_font = ImageFont.truetype(fp, font_size)
+                                break
+                    except:
+                        target_font = None
+                    
+                    if rect:
+                        rx1, ry1, rx2, ry2 = rect
+                        rx1 = int(rx1 * ratio)
+                        ry1 = int(ry1 * ratio)
+                        rx2 = int(rx2 * ratio)
+                        ry2 = int(ry2 * ratio)
+                        
+                        if (rx2 - rx1) < 20: rx1, rx2 = rx1 - 10, rx2 + 10
+                        if (ry2 - ry1) < 20: ry1, ry2 = ry1 - 10, ry2 + 10
+
+                        for i in range(4):
+                            draw.rectangle([rx1-i, ry1-i, rx2+i, ry2+i], outline=color, width=3)
+                        
+                        # Draw high-contrast black background for text
+                        text_str = status_text
+                        try:
+                            t_bbox = draw.textbbox((rx1, ry1 - font_size - 10), text_str, font=target_font)
+                            # Add some padding to the background box
+                            bg_padding = 5
+                            bg_label = [t_bbox[0]-bg_padding, t_bbox[1]-bg_padding, t_bbox[2]+bg_padding, t_bbox[3]+bg_padding]
+                            draw.rectangle(bg_label, fill=(0, 0, 0, 180)) # Semi-transparent black
+                        except:
+                            # Fallback if textbbox is missing
+                            draw.rectangle([rx1, ry1 - font_size - 15, rx1 + 300, ry1 - 5], fill=(0, 0, 0, 180))
+                            
+                        # Draw status text on top of the black box
+                        draw.text((rx1, ry1 - font_size - 10), text_str, fill=color, font=target_font)
 
             self.tk_img = ImageTk.PhotoImage(img_resized)
             self.canvas.delete("all")
