@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+env/
+venv/
+ENV/
+gui_config.json
+splicing_results_*.csv
+.DS_Store
+.vscode/
