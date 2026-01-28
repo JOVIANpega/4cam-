@@ -155,7 +155,18 @@ class SplicingProcessor:
         targets = self.Find_Center_ROI(image, roi_points)
         
         if not targets:
-            return None
+            # Replicate 100cm.py Line 467: ROI_SELECTOR_ERROR
+            # Create a dummy image and targets to allow the pipeline to report 100px
+            dummy_PX = self.x_30
+            final_steps = []
+            for i in range(3):
+                final_steps.append({
+                    'rect': (int(dummy_PX-self.roi_w), int(self.y_center_ave - 400 + i*400), int(dummy_PX+self.roi_w), int(self.y_center_ave - 400 + i*400 + 30)),
+                    'index': i,
+                    'force_fail': 100.0,
+                    'msg': "ROI ERROR"
+                })
+            return image, final_steps
             
         target = targets[0]
         PX, PY = target['x'], target['y']
@@ -178,20 +189,24 @@ class SplicingProcessor:
 
         ave_L, ave_R = get_slides(image_slide_roi, Wx)
         
-        def find_red_indices(ave_col):
+        def find_red_indices(ave_col, ref_col=None):
             indices = []
             thd = 120
+            # Replicate 100cm.py bug: if ref_col is provided, use its color ratio for filtering
+            # Line 190 & 194 in 100cm.py both use rate_gr_R and rate_br_R
             for j in range(len(ave_col)):
                 b, g, r = ave_col[j]
-                if r <= thd: continue
-                # Exact logic from original script: rate_gr < 0.75 and rate_br < 0.70
-                if (g/r < 0.75) and (b/r < 0.70):
-                    if 400 < j < 2650:
+                rb, rg, rr = ref_col[j] if ref_col is not None else (b, g, r)
+                
+                if rr <= 0: continue
+                # Exact logic from original script: rate_gr_R < 0.75 and rate_br_R < 0.70
+                if (rg/rr < 0.75) and (rb/rr < 0.70):
+                    if r > thd and 400 < j < 2650:
                         indices.append(j)
             return indices
 
-        L_R_list = find_red_indices(ave_L)
-        R_R_list = find_red_indices(ave_R)
+        L_R_list = find_red_indices(ave_L, ave_R) # Replicate bug: use ave_R for filtering L
+        R_R_list = find_red_indices(ave_R, ave_R)
         
         if not L_R_list or not R_R_list: 
             return None
@@ -225,7 +240,21 @@ class SplicingProcessor:
         L_R_Py, L_R_H = get_pyh(L_R_list)
         R_R_Py, R_R_H = get_pyh(R_R_list)
         
-        num_targets = min(len(L_R_Py), len(R_R_Py), 4)
+        # Handle case where L_R_Py or R_R_Py is too short
+        num_targets = min(len(L_R_Py), len(R_R_Py), 3) 
+        
+        # If still no targets found in Stage 2, fallback to ROI ERROR dummy steps
+        if num_targets == 0:
+            final_steps = []
+            for i in range(3):
+                final_steps.append({
+                    'rect': (int(PX-self.roi_w), int(self.y_center_ave - 400 + i*400), int(PX+self.roi_w), int(self.y_center_ave - 400 + i*400 + 30)),
+                    'index': i,
+                    'force_fail': 100.0,
+                    'msg': "ROI ERROR"
+                })
+            return image, final_steps
+
         final_steps = []
         for i in range(num_targets):
             alignment_offset = abs(L_R_Py[i] - R_R_Py[i])
@@ -247,48 +276,124 @@ class SplicingProcessor:
             
         return image, final_steps
 
+    def find_top10(self, arr):
+        if len(arr) == 0: return np.zeros(10)
+        # Use simple sort to avoid argsort complexity for small arrays
+        return np.sort(arr)[-10:][::-1]
+
+    def analyze_discontinuity(self, image, delta_h):
+        try:
+            h_orig, w_orig = image.shape[:2]
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            # 100cm.py Line 210
+            gray_crop = gray[5:, :]
+            
+            dy_u, dy_d = 15, 3
+            Tdelt_h = 4 * delta_h
+            # ROI_imagecolor=image[dy_u:Tdelt_h-dy_d,:] 
+            roi_color = image[dy_u:max(dy_u+1, Tdelt_h-dy_d), :]
+            h_color, w_color = roi_color.shape[:2]
+            
+            Wx, dx_gap = int(w_color/2), 5
+            
+            def get_means(img_slice, channel):
+                res = []
+                for i in range(img_slice.shape[0]):
+                    res.append(np.mean(img_slice[i, :, channel]))
+                return np.array(res)
+
+            # Left/Right slices
+            slice_L = roi_color[:, :max(1, Wx-dx_gap)]
+            slice_R = roi_color[:, min(w_color-1, Wx+dx_gap):]
+            
+            # B=0, G=1, R=2
+            cB_L = get_means(slice_L, 0)
+            cB_R = get_means(slice_R, 0)
+            cG_L = get_means(slice_L, 1)
+            cG_R = get_means(slice_R, 1)
+            cR_L = get_means(slice_L, 2)
+            cR_R = get_means(slice_R, 2)
+            
+            # Gray averages (Line 238)
+            slice_gray_L = gray_crop[:, :max(1, Wx-dx_gap)]
+            slice_gray_R = gray_crop[:, min(w_color-1, Wx+dx_gap):]
+            white_L_list = []
+            white_R_list = []
+            for i in range(slice_gray_L.shape[0]):
+                white_L_list.append(np.mean(slice_gray_L[i, :]))
+                white_R_list.append(np.mean(slice_gray_R[i, :]))
+            
+            # Filtering (Line 230)
+            cB_L = cB_L[cB_L <= 128]
+            cB_R = cB_R[cB_R <= 128]
+            
+            def safe_mean_top10(arr):
+                if len(arr) == 0: return 0.0
+                return np.mean(self.find_top10(arr))
+
+            blue_l_val, blue_r_val = safe_mean_top10(cB_L), safe_mean_top10(cB_R)
+            green_l_val, green_r_val = safe_mean_top10(cG_L), safe_mean_top10(cG_R)
+            red_l_val, red_r_val = safe_mean_top10(cR_L), safe_mean_top10(cR_R)
+            white_l_val, white_r_val = safe_mean_top10(np.array(white_L_list)), safe_mean_top10(np.array(white_R_list))
+            
+            def calc_disc(l, r):
+                denom = (l + r) / 2
+                if denom == 0: return 0.0
+                return abs(l - r) / denom
+
+            white_disc = calc_disc(white_l_val, white_r_val)
+            red_disc = calc_disc(red_l_val, red_r_val)
+            green_disc = calc_disc(green_l_val, green_r_val)
+            blue_disc = calc_disc(blue_l_val, blue_r_val)
+            
+            return white_disc, red_disc, green_disc, blue_disc
+        except Exception:
+            return 1.0, 1.0, 1.0, 1.0
+
     def process_step(self, image, step_info):
+        force_fail = step_info.get('force_fail')
+        if force_fail is not None:
+            # 100cm.py Line 471-474: All discontinue = 100%
+            return int(force_fail), np.zeros((100, 280, 3), dtype=np.uint8), (1.0, 1.0, 1.0, 1.0)
+
         x1, y1, x2, y2 = step_info['rect']
         h_img, w_img = image.shape[:2]
         ROI_img = image[max(0, y1):min(h_img, y2), max(0, x1):min(w_img, x2)]
-        if ROI_img.size == 0: return 0, np.zeros((100, 280, 3), dtype=np.uint8)
+        
+        # Discontinuity Analysis (Stage 4)
+        # Needs a specific ROI starting from py to py + delta*5
+        std_py = int(step_info['py'])
+        std_px = int(step_info['px'])
+        delta_h = int(step_info.get('delta', 26))
+        
+        color_roi_y2 = min(h_img, std_py + delta_h * 5)
+        roi_color_img = image[std_py:color_roi_y2, max(0, std_px-30):min(w_img, std_px+30)]
+        white_d, red_d, green_d, blue_d = self.analyze_discontinuity(roi_color_img, delta_h)
+
+        if ROI_img.size == 0: 
+            return 0, np.zeros((100, 280, 3), dtype=np.uint8), (white_d, red_d, green_d, blue_d)
         
         gray = cv2.cvtColor(ROI_img, cv2.COLOR_BGR2GRAY)
         h, w = gray.shape[:2]
         
-        centers = [int(w/2 - w/3), int(w/2 - w/6), int(w/2), int(w/2 + w/6), int(w/2 + w/3)]
+        centers = [int(w/2 - w/6*2), int(w/2 - w/6), int(w/2), int(w/2 + w/6), int(w/2 + w/6*2)]
         
-        all_valleys_L = []
-        all_valleys_R = []
-        all_ps = []
-        
-        all_vL = []
-        all_vR = []
-        line_diffs = []
+        all_vL, all_vR, line_diffs = [], [], []
         for cl in centers:
             vL, vR, ps = self.Pixel_Shift_analysis(gray, self.diff_thd, cl)
-            # 100cm.py: maxvalleys_0=abs(maxvalleys_L_0-maxvalleys_R_0)
             mvL, mvR = max(vL), max(vR)
             all_vL.append(mvL)
             all_vR.append(mvR)
-            line_diff = abs(mvL - mvR)
-            # 100cm.py: maxvalleys_0=max(maxvalleys_0,pixelsShifT_0)
-            line_diffs.append(max(line_diff, ps))
+            line_diffs.append(max(abs(mvL - mvR), ps))
             
-        # 100cm.py: maxvalleys_up=max(maxvalleys_0,maxvalleys_1,maxvalleys_2,maxvalleys_3,maxvalleys_4)
         final_ps = max(line_diffs)
-        max_vL = max(all_vL)
-        max_vR = max(all_vR)
+        max_vL, max_vR = max(all_vL), max(all_vR)
         
-        # 100cm.py line 560: if pixels_shift_max >= 15 : pixels_shift_max = 15
         if final_ps >= 15: final_ps = 15
         
-        # 100cm.py line 680: if area_i >= 15: final_ps = area_i
-        # This catches "PixelsShift_ERROR" which seems to be the case for cam12
         if step_info.get('alignment_offset', 0) >= 15:
             final_ps = max(final_ps, step_info['alignment_offset'])
 
-        # Calibration compensation from 100cm.py line 568
         if step_info.get('calibration', 0) == 1:
             final_ps = abs(final_ps - 1)
         else:
@@ -300,4 +405,4 @@ class SplicingProcessor:
         if max_vR > 0:
             cv2.line(debug_viz, (int(w/2), int(max_vR)), (w, int(max_vR)), (0, 0, 255), 1)
             
-        return int(final_ps), debug_viz
+        return int(final_ps), debug_viz, (white_d, red_d, green_d, blue_d)

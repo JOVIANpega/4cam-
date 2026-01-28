@@ -1,4 +1,6 @@
 import tkinter as tk
+import sys
+import numpy as np
 from tkinter import filedialog
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
@@ -18,8 +20,8 @@ class SplicingGUI:
         self.root.geometry("1400x900")
         
         # Global Default Parameters (Synchronized with User Screenshot)
-        self.DEFAULT_DIFF = 18.0
-        self.DEFAULT_RATE = 0.18
+        self.DEFAULT_DIFF = 10.0
+        self.DEFAULT_RATE = 0.1
         self.DEFAULT_FAIL = 5
         self.auto_analyze_var = tk.BooleanVar(value=True)
         self.auto_clear_log_var = tk.BooleanVar(value=True)
@@ -28,17 +30,35 @@ class SplicingGUI:
         self.style = ttk.Style(theme="darkly")
         
         self.processor = SplicingProcessor()
+        
+        # Robust path handling for EXE
+        if getattr(sys, 'frozen', False):
+            self.base_path = os.path.dirname(sys.executable)
+        else:
+            self.base_path = os.path.dirname(os.path.abspath(__file__))
+            
+        self.config_path = os.path.join(self.base_path, "gui_config.json")
+        self.last_dir = self.base_path
+        
+        # Initialize variables for persistence
+        self.diff_thd_var = tk.DoubleVar()
+        self.rate_thd_var = tk.DoubleVar()
+        self.fail_thd_var = tk.IntVar()
+        
+        # State variables
+        self.is_analyzing = False
+        self.stop_event = threading.Event()
+        self.results_data = []
         self.current_image_path = None
         self.batch_files = []
         self.batch_index = 0
-        self.is_analyzing = False
-        self.stop_event = threading.Event()
-        self.results_data = [] # Store analysis results
-        self.config_path = os.path.join(os.path.dirname(__file__), "gui_config.json")
-        self.load_config()
         
+        self.load_config()
         self.setup_ui()
+        
+        # Event bindings for persistence
         self.root.bind("<Configure>", self.on_window_resize)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     def setup_ui(self):
         # Paned Window for adjustable split
@@ -135,27 +155,24 @@ class SplicingGUI:
         
         # Differential Threshold
         ttk.Label(param_frame, text="差異閾值 (Diff Threshold):", font=("Helvetica", 10)).pack(anchor=W)
-        self.diff_thd_var = tk.DoubleVar(value=self.DEFAULT_DIFF)
         self.diff_slider = ttk.Scale(param_frame, from_=0, to=50, variable=self.diff_thd_var, orient=HORIZONTAL)
         self.diff_slider.pack(fill=X, pady=5)
         ToolTip(self.diff_slider, text="調整邊緣檢測的靈敏度。建議值：18。")
-        self.diff_label = ttk.Label(param_frame, text="18", font=("Helvetica", 12, "bold"))
+        self.diff_label = ttk.Label(param_frame, text="10", font=("Helvetica", 12, "bold"))
         self.diff_label.pack(anchor=E)
         self.diff_thd_var.trace_add("write", lambda *args: self.update_labels())
         
         # Rate Threshold
         ttk.Label(param_frame, text="比率閾值 (Rate Threshold):", font=("Helvetica", 10)).pack(anchor=W, pady=(15, 0))
-        self.rate_thd_var = tk.DoubleVar(value=self.DEFAULT_RATE)
         self.rate_slider = ttk.Scale(param_frame, from_=0.0, to=0.5, variable=self.rate_thd_var, orient=HORIZONTAL)
         self.rate_slider.pack(fill=X, pady=5)
         ToolTip(self.rate_slider, text="調整判定鬼影比例。建議值：0.18。")
-        self.rate_label = ttk.Label(param_frame, text="0.18", font=("Helvetica", 12, "bold"))
+        self.rate_label = ttk.Label(param_frame, text="0.10", font=("Helvetica", 12, "bold"))
         self.rate_label.pack(anchor=E)
         self.rate_thd_var.trace_add("write", lambda *args: self.update_labels())
 
         # Fail Threshold
         ttk.Label(param_frame, text="不合格判定值 (Fail Threshold px):", font=("Helvetica", 10)).pack(anchor=W, pady=(15, 0))
-        self.fail_thd_var = tk.IntVar(value=self.DEFAULT_FAIL)
         self.fail_slider = ttk.Scale(param_frame, from_=1, to=15, variable=self.fail_thd_var, orient=HORIZONTAL)
         self.fail_slider.pack(fill=X, pady=5)
         ToolTip(self.fail_slider, text="設定判定為 '不合格' 的最小偏移。建議值：5。")
@@ -169,27 +186,55 @@ class SplicingGUI:
         self.status_bar.pack(side=BOTTOM, fill=X)
 
     def load_config(self):
-        self.gui_config = {"sash_pos": 350, "auto_analyze": True, "auto_clear_log": True}
+        # Default configuration
+        self.gui_config = {
+            "sash_pos": 350, 
+            "auto_analyze": True, 
+            "auto_clear_log": True,
+            "window_geometry": "1400x900",
+            "last_dir": self.last_dir,
+            "diff_thd": self.DEFAULT_DIFF,
+            "rate_thd": self.DEFAULT_RATE,
+            "fail_thd": self.DEFAULT_FAIL
+        }
+        
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, 'r') as f:
                     self.gui_config.update(json.load(f))
-                    # Apply persistent preferences
-                    self.auto_analyze_var.set(self.gui_config.get("auto_analyze", True))
-                    self.auto_clear_log_var.set(self.gui_config.get("auto_clear_log", True))
             except: pass
+        
+        # Apply configurations to variables
+        self.auto_analyze_var.set(self.gui_config.get("auto_analyze", True))
+        self.auto_clear_log_var.set(self.gui_config.get("auto_clear_log", True))
+        self.diff_thd_var.set(self.gui_config.get("diff_thd", self.DEFAULT_DIFF))
+        self.rate_thd_var.set(self.gui_config.get("rate_thd", self.DEFAULT_RATE))
+        self.fail_thd_var.set(self.gui_config.get("fail_thd", self.DEFAULT_FAIL))
+        self.last_dir = self.gui_config.get("last_dir", self.last_dir)
+        
+        # Apply window geometry
+        try:
+            self.root.geometry(self.gui_config.get("window_geometry", "1400x900"))
+        except: pass
 
     def save_config(self):
         try:
-            try:
-                self.gui_config["sash_pos"] = self.left_panel.winfo_width()
-                self.gui_config["auto_analyze"] = self.auto_analyze_var.get()
-                self.gui_config["auto_clear_log"] = self.auto_clear_log_var.get()
-            except: pass
+            self.gui_config["sash_pos"] = self.left_panel.winfo_width()
+            self.gui_config["auto_analyze"] = self.auto_analyze_var.get()
+            self.gui_config["auto_clear_log"] = self.auto_clear_log_var.get()
+            self.gui_config["window_geometry"] = self.root.geometry()
+            self.gui_config["last_dir"] = self.last_dir
+            self.gui_config["diff_thd"] = self.diff_thd_var.get()
+            self.gui_config["rate_thd"] = self.rate_thd_var.get()
+            self.gui_config["fail_thd"] = self.fail_thd_var.get()
             
             with open(self.config_path, 'w') as f:
                 json.dump(self.gui_config, f)
         except: pass
+
+    def on_close(self):
+        self.save_config()
+        self.root.destroy()
 
     def restore_sash(self):
         try:
@@ -260,8 +305,12 @@ class SplicingGUI:
             return Image.open(path)
 
     def load_image(self):
-        path = filedialog.askopenfilename(filetypes=[("圖片檔案", "*.jpg *.png *.bmp")])
+        path = filedialog.askopenfilename(
+            initialdir=self.last_dir,
+            filetypes=[("圖片檔案", "*.jpg *.png *.bmp")]
+        )
         if path:
+            self.last_dir = os.path.dirname(path)
             if self.auto_clear_log_var.get():
                 self.clear_log()
             self.current_image_path = path
@@ -272,8 +321,9 @@ class SplicingGUI:
                 self.start_analysis()
 
     def load_folder(self):
-        folder = filedialog.askdirectory()
+        folder = filedialog.askdirectory(initialdir=self.last_dir)
         if folder:
+            self.last_dir = folder
             if self.auto_clear_log_var.get():
                 self.clear_log()
             self.batch_files = [os.path.join(folder, f) for f in os.listdir(folder) 
@@ -479,34 +529,52 @@ class SplicingGUI:
             
             result = self.processor.analyze_image_prepare(path)
             if not result:
-                self.log(f"  [跳過] 在 {os.path.basename(path)} 中未發現任何可分析目標。")
+                self.log(f"  [NG] 在 {os.path.basename(path)} 中發生嚴重錯誤，無法載入影像。")
                 return
                 
             cv_img, steps = result
             image_pass = True
             
+            # Collectors for final spec_issue log
+            shift_vals = []
+            disc_vals = [] # List of tuples: (white, red, green, blue)
+            
             for step in steps:
                 if self.stop_event.is_set(): return
+                
+                # Check for forced failure (ROI_SELECTOR_ERROR replication)
+                force_fail = step.get('force_fail')
                 
                 # Animation Start - Yellow Box
                 overlay = {'rect': step['rect'], 'text': "SCANNING", 'status': 'checking'}
                 self.root.after(0, self.safe_update_ui, path, overlay.copy())
                 time.sleep(0.7) 
                 
-                # Actual calculation
-                shift, debug_roi = self.processor.process_step(cv_img, step)
+                if force_fail is not None:
+                    shift, debug_roi, discs = self.processor.process_step(cv_img, step)
+                    msg = step.get('msg', "ERROR")
+                    status_text = f"SHIFT: {shift}px [{msg}]"
+                    is_pass = False
+                    # Create a blank/error ROI for preview
+                    debug_roi = np.zeros((100, 280, 3), dtype=np.uint8)
+                    cv2.putText(debug_roi, msg, (50, 60), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 3)
+                else:
+                    # Actual calculation
+                    shift, debug_roi, discs = self.processor.process_step(cv_img, step)
+                    # Determine PASS/FAIL
+                    is_pass = shift < int(self.fail_thd_var.get())
+                    status_text = f"SHIFT: {shift}px [{'OK' if is_pass else 'NG'}]"
                 
-                # Determine PASS/FAIL
-                is_pass = shift < int(self.fail_thd_var.get())
+                shift_vals.append(shift)
+                disc_vals.append(discs)
+                
                 if not is_pass: image_pass = False
-                
                 status_tag = 'pass' if is_pass else 'fail'
-                status_text = f"SHIFT: {shift}px [{'OK' if is_pass else 'NG'}]"
                 
                 # Update ROI Preview
                 self.display_roi(debug_roi)
                 
-                # Store result
+                # Store result for CSV
                 res = [os.path.basename(path), step['index'], shift, 
                        'PASS' if is_pass else 'FAIL', time.strftime("%H:%M:%S")]
                 self.results_data.append(res)
@@ -520,10 +588,32 @@ class SplicingGUI:
                 self.log(f"  Target {step['index']}: {shift} px -> {'PASS' if is_pass else 'FAIL'}{fail_msg}")
                 time.sleep(1.0) 
             
+            # --- FINAL SPEC ISSUE LOGGING ---
+            cam_id = "cam"
+            import re
+            name_match = re.search(r'cam(\d+)', os.path.basename(path).lower())
+            if name_match: cam_id = f"cam{name_match.group(1)}"
+            
+            self.log("\nspec_issue:")
+            for i, s in enumerate(shift_vals):
+                self.log(f"{cam_id}:MAX_PixelsShift_{i}={float(s)}")
+            
+            for i, d in enumerate(disc_vals):
+                w, r, g, b = d
+                self.log(f"{cam_id}:Brightness_discontinue_{i}={w*100.0:.1f}")
+                self.log(f"{cam_id}:red_discontinue_{i}={r*100.0:.1f}")
+                self.log(f"{cam_id}:green_discontinue_{i}={g*100.0:.1f}")
+                self.log(f"{cam_id}:blue_discontinue_{i}={b*100.0:.1f}")
+            
+            avg_shift = sum(shift_vals) / len(shift_vals) if shift_vals else 0
+            self.log(f"pixel_shift_avg = {avg_shift}")
+            self.log("SPEC_PASS" if image_pass else "SPEC_FAIL")
+            self.log("----------------------------------")
+
             # Final Giant Result Overlay
             final_overlay = {'final_result': 'pass' if image_pass else 'fail'}
             self.root.after(0, self.safe_update_ui, path, final_overlay)
-            time.sleep(1.2) # Extra time to see the big result
+            time.sleep(1.2) 
         except Exception as e:
             self.log(f"分析單張照片時發生錯誤: {str(e)}")
 

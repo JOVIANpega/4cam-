@@ -10,3 +10,6 @@ gui_config.json
 splicing_results_*.csv
 .DS_Store
 .vscode/
+dist/
+build/
+*.spec
