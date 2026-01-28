@@ -14,13 +14,14 @@ import json
 from splicing_logic import SplicingProcessor
 import re
 
-VERSION = "1.1.5"
+VERSION = "1.1.9"
 
 class SplicingGUI:
     def __init__(self, root):
         self.root = root
         self.root.title(f"動態拼接檢查系統 (Dynamic Splicing Check System) - V{VERSION}")
         self.root.geometry("1400x900")
+        self.root.state('zoomed') # Default to full screen
         
         # Global Default Parameters (Synchronized with User Latest Request)
         self.DEFAULT_DIFF = 18.0
@@ -130,18 +131,13 @@ class SplicingGUI:
         
         ttk.Separator(self.left_panel, orient=HORIZONTAL).pack(fill=X, pady=10)
         
-        self.log_area = ttk.ScrolledText(self.left_panel, width=30, height=15, font=("Consolas", 10))
+        # Log Area - Expanded (v1.1.7)
+        self.log_area = ttk.ScrolledText(self.left_panel, width=30, font=("Microsoft JhengHei", 10))
         self.log_area.pack(fill=BOTH, expand=YES, pady=5)
-        # Setup tags for coloring PASS/FAIL results
-        self.log_area.tag_config("pass_text", foreground="#00FF00", font=("Consolas", 10, "bold"))
-        self.log_area.tag_config("fail_text", foreground="#FF0000", font=("Consolas", 10, "bold"))
-        self.log_area.tag_config("blue_text", foreground="#00BFFF", font=("Consolas", 10, "bold"))
-        
-        # Debug ROI Preview
-        self.roi_preview_label = ttk.Label(self.left_panel, text="目標區塊預覽 (Target ROI Preview)", font=("Helvetica", 10, "bold"))
-        self.roi_preview_label.pack(pady=(10, 0))
-        self.roi_canvas = tk.Canvas(self.left_panel, width=280, height=100, bg="black", highlightthickness=1, highlightbackground="gray")
-        self.roi_canvas.pack(pady=5)
+        # Setup tags for coloring PASS/FAIL results (Microsoft JhengHei)
+        self.log_area.tag_config("pass_text", foreground="#00FF00", font=("Microsoft JhengHei", 10, "bold"))
+        self.log_area.tag_config("fail_text", foreground="#FF0000", font=("Microsoft JhengHei", 10, "bold"))
+        self.log_area.tag_config("blue_text", foreground="#00BFFF", font=("Microsoft JhengHei", 10, "bold"))
         
         # Right Panel - Notebook with Tabs
         self.right_panel = ttk.Frame(self.paned)
@@ -150,13 +146,44 @@ class SplicingGUI:
         # Use a standard ttk.Notebook
         self.notebook = ttk.Notebook(self.right_panel, bootstyle=PRIMARY)
         self.notebook.pack(fill=BOTH, expand=YES, padx=5, pady=5)
+
+        # Restore Sash Position (v1.2.0)
+        sash_pos = self.gui_config.get("sash_pos", 350)
+        self.root.after(200, lambda: self.paned.sashpos(0, sash_pos))
         
         # --- TAB 1: Image View ---
         self.img_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.img_tab, text=" [ 圖片顯示 (Image View) ] ")
         
-        self.canvas = tk.Canvas(self.img_tab, bg="#1a1a1a", highlightthickness=0)
+        # Top: Canvas for main image
+        self.canvas_frame = ttk.Frame(self.img_tab)
+        self.canvas_frame.pack(fill=BOTH, expand=YES)
+        
+        self.canvas = tk.Canvas(self.canvas_frame, bg="#1a1a1a", highlightthickness=0)
         self.canvas.pack(fill=BOTH, expand=YES)
+        
+        # Bottom: Preview Area for Targets
+        self.preview_outer = ttk.Frame(self.img_tab, height=150) # Increased height
+        self.preview_outer.pack(fill=X, side=BOTTOM, padx=5, pady=5)
+        self.preview_outer.pack_propagate(False)
+        
+        lbl_preview = ttk.Label(self.preview_outer, text="🔍 目標區塊快照 (Target Snapshots):", font=("Helvetica", 9, "bold"))
+        lbl_preview.pack(anchor=W, padx=5)
+        
+        # Horizontal Scrollbar for previews
+        preview_scroll = ttk.Scrollbar(self.preview_outer, orient=HORIZONTAL)
+        preview_scroll.pack(side=BOTTOM, fill=X)
+        
+        self.preview_canvas = tk.Canvas(self.preview_outer, height=100, bg="#2d2d2d", 
+                                       highlightthickness=0, xscrollcommand=preview_scroll.set)
+        self.preview_canvas.pack(fill=BOTH, expand=YES)
+        preview_scroll.config(command=self.preview_canvas.xview)
+        
+        self.preview_frame = ttk.Frame(self.preview_canvas)
+        self.preview_canvas.create_window((0, 0), window=self.preview_frame, anchor=NW)
+        self.preview_frame.bind("<Configure>", lambda e: self.preview_canvas.configure(scrollregion=self.preview_canvas.bbox("all")))
+        
+        self.preview_widgets = [] # To keep track of thumbnails
         
         # --- TAB 2: Settings ---
         self.settings_tab = ttk.Frame(self.notebook)
@@ -548,6 +575,13 @@ class SplicingGUI:
         # Update Status Bar
         if hasattr(self, 'status_bar'):
             self.status_bar.configure(font=("Helvetica", size))
+            
+        # Update Log font (Microsoft JhengHei)
+        if hasattr(self, 'log_area'):
+            self.log_area.configure(font=("Microsoft JhengHei", size))
+            self.log_area.tag_config("pass_text", font=("Microsoft JhengHei", size, "bold"))
+            self.log_area.tag_config("fail_text", font=("Microsoft JhengHei", size, "bold"))
+            self.log_area.tag_config("blue_text", font=("Microsoft JhengHei", size, "bold"))
 
     def update_labels(self):
         self.diff_label.config(text=f"{int(self.diff_thd_var.get())}")
@@ -614,6 +648,8 @@ class SplicingGUI:
             self.log(f"已載入: {os.path.basename(path)}")
             if self.auto_analyze_var.get():
                 self.start_analysis()
+            else:
+                self.clear_previews()
 
     def load_folder(self):
         folder = filedialog.askdirectory(initialdir=self.last_dir)
@@ -631,6 +667,8 @@ class SplicingGUI:
                 self.log(f"已載入資料夾: {folder} ({len(self.batch_files)} 張照片)")
                 if self.auto_analyze_var.get():
                     self.start_analysis()
+                else:
+                    self.clear_previews()
             else:
                 self.log("資料夾內未發現支援的照片格式。")
 
@@ -761,7 +799,8 @@ class SplicingGUI:
 
             self.tk_img = ImageTk.PhotoImage(img_resized)
             self.canvas.delete("all")
-            self.canvas.create_image(canvas_w//2, canvas_h//2, image=self.tk_img, anchor=CENTER)
+            # Anchor to North (top) instead of CENTER to leave space below
+            self.canvas.create_image(canvas_w//2, 10, image=self.tk_img, anchor=N)
             
             # Store resized image for magnifier source
             self.current_resized_img = img_resized
@@ -854,20 +893,6 @@ class SplicingGUI:
         except Exception as e:
             self.log(f"UI Update Error: {str(e)}")
 
-    def display_roi(self, cv_img):
-        def _update_roi():
-            # Convert BGR to RGB
-            img_rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-            img_pil = Image.fromarray(img_rgb)
-            
-            # Resize to fit roi_canvas
-            w, h = 280, 100
-            img_resized = img_pil.resize((w, h), Image.NEAREST) # Use nearest for pixel-level debugging
-            
-            self.roi_tk_img = ImageTk.PhotoImage(img_resized)
-            self.roi_canvas.delete("all")
-            self.roi_canvas.create_image(w//2, h//2, image=self.roi_tk_img, anchor=CENTER)
-        self.root.after(0, _update_roi)
 
     def start_analysis(self):
         if not self.current_image_path:
@@ -886,6 +911,7 @@ class SplicingGUI:
         self.processor.rate_thd = self.rate_thd_var.get()
         self.processor.dist_thd = self.dist_thd_var.get()
         
+        self.clear_previews()
         threading.Thread(target=self.run_analysis_pipeline, daemon=True).start()
 
     def run_analysis_pipeline(self):
@@ -927,6 +953,7 @@ class SplicingGUI:
                 
             cv_img, steps = result
             image_pass = True
+            fail_reasons = [] # Collector for diagnostic info
             
             # Collectors for final spec_issue log
             shift_vals = []
@@ -962,11 +989,14 @@ class SplicingGUI:
                 shift_vals.append(shift)
                 disc_vals.append(discs)
                 
-                if not is_pass: image_pass = False
+                if not is_pass: 
+                    image_pass = False
+                    if force_fail is not None:
+                        fail_reasons.append(f"目標 {step['index']}: 定位失敗 (ROI ERROR) - 找不到紅點或條紋特徵。")
+                    else:
+                        fail_reasons.append(f"目標 {step['index']}: 位移超標 ({shift}px) - 超過門檻值 {int(self.fail_thd_var.get())}px。")
                 status_tag = 'pass' if is_pass else 'fail'
                 
-                # Update ROI Preview
-                self.display_roi(debug_roi)
                 
                 # Store result for CSV
                 res = [os.path.basename(path), step['index'], shift, 
@@ -980,6 +1010,10 @@ class SplicingGUI:
                 
                 fail_msg = "" if is_pass else f" (THRESHOLD {self.fail_thd_var.get()}px)"
                 self.log(f"  Target {step['index']}: {shift} px -> {'PASS' if is_pass else 'FAIL'}{fail_msg}")
+                
+                # Add to Bottom Preview Area (v1.1.8: Horizontal + Arrow)
+                self.add_preview_thumbnail(debug_roi, step['index'], status_tag, shift, step['rect'])
+                
                 time.sleep(1.0) 
             
             # --- FINAL SPEC ISSUE LOGGING ---
@@ -1026,6 +1060,16 @@ class SplicingGUI:
                     self.log(f"  [OK] 幾何形狀正常 (最大變形比率: {max_ecc}, 樣本數: {found_cnt})")
 
             self.log("SPEC_PASS" if image_pass else "SPEC_FAIL")
+            
+            # --- DIAGNOSTIC SUMMARY (v1.1.9) ---
+            if not image_pass:
+                self.log("\n【分析故障診斷】(Diagnostic Summary):")
+                if not fail_reasons and self.check_distortion_var.get():
+                    self.log("- 拼接位移正常，但發現幾何畸變程度過高。")
+                for reason in fail_reasons:
+                    self.log(f"- {reason}")
+                self.log("💡 建議：檢查光源是否均勻，或標靶是否被遮擋/模糊。")
+            
             self.log("----------------------------------")
 
             # Final Giant Result Overlay
@@ -1034,6 +1078,149 @@ class SplicingGUI:
             time.sleep(1.2) 
         except Exception as e:
             self.log(f"分析單張照片時發生錯誤: {str(e)}")
+
+    def clear_previews(self):
+        def _clear():
+            for widget in self.preview_widgets:
+                widget.destroy()
+            self.preview_widgets = []
+            self.preview_canvas.xview_moveto(0.0)
+        self.root.after(0, _clear)
+
+    def add_preview_thumbnail(self, cv_img, index, status, shift, rect):
+        def _add():
+            try:
+                if len(cv_img.shape) == 3:
+                    img_rgb = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
+                else:
+                    img_rgb = cv2.cvtColor(cv_img, cv2.COLOR_GRAY2RGB)
+                
+                img_pil = Image.fromarray(img_rgb)
+                
+                # High-res copy for magnifier
+                large_w, large_h = 450, 160
+                img_large = img_pil.resize((large_w, large_h), Image.LANCZOS)
+                tk_large = ImageTk.PhotoImage(img_large)
+
+                # Thumbnail Image (Larger)
+                thumb_w, thumb_h = 220, 85
+                img_thumb = img_pil.resize((thumb_w, thumb_h), Image.LANCZOS)
+                tk_thumb = ImageTk.PhotoImage(img_thumb)
+                
+                # Container
+                item_frame = ttk.Frame(self.preview_frame, padding=5, bootstyle="secondary")
+                item_frame.pack(side=LEFT, padx=10)
+                
+                # Image on Left
+                border_color = "#00FF00" if status == 'pass' else "#FF0000"
+                lbl_img = tk.Label(item_frame, image=tk_thumb, bg=border_color, bd=2)
+                lbl_img.image = tk_thumb 
+                lbl_img.pack(side=LEFT)
+                
+                # Info on Right
+                info_frame = ttk.Frame(item_frame)
+                info_frame.pack(side=LEFT, padx=10)
+                
+                status_zh = "通過" if status == 'pass' else "不合格"
+                lbl_index = ttk.Label(info_frame, text=f"目標 T{index}", font=("Helvetica", 10, "bold"))
+                lbl_index.pack(anchor=W)
+                
+                lbl_shift = ttk.Label(info_frame, text=f"位移: {shift}px", font=("Helvetica", 9))
+                lbl_shift.pack(anchor=W)
+                
+                lbl_status = ttk.Label(info_frame, text=f"結果: {status_zh}", 
+                                      foreground=border_color, font=("Helvetica", 9, "bold"))
+                lbl_status.pack(anchor=W)
+
+                # Hover Arrow & Magnifier Logic
+                mag_win = None
+
+                def show_hover(event):
+                    nonlocal mag_win
+                    # 1. Show Arrow on main canvas
+                    self.show_target_arrow(rect)
+                    
+                    # 2. Show Popup Magnifier
+                    if not mag_win:
+                        mag_win = tk.Toplevel(self.root)
+                        mag_win.overrideredirect(True)
+                        mag_win.attributes("-topmost", True)
+                        l = tk.Label(mag_win, image=tk_large, bg="white", bd=2)
+                        l.image = tk_large
+                        l.pack()
+                        move_mag(event)
+
+                def hide_hover(event):
+                    nonlocal mag_win
+                    self.hide_target_arrow()
+                    if mag_win:
+                        mag_win.destroy()
+                        mag_win = None
+
+                def move_mag(event):
+                    nonlocal mag_win
+                    if mag_win:
+                        x = event.x_root + 20
+                        y = event.y_root - 180
+                        mag_win.geometry(f"+{x}+{y}")
+
+                lbl_img.bind("<Enter>", show_hover)
+                lbl_img.bind("<Leave>", hide_hover)
+                lbl_img.bind("<Motion>", move_mag)
+                
+                self.preview_widgets.append(item_frame)
+                self.preview_canvas.update_idletasks()
+                self.preview_canvas.configure(scrollregion=self.preview_canvas.bbox("all"))
+                self.preview_canvas.xview_moveto(1.0)
+            except Exception as e:
+                print(f"Thumbnail Error: {e}")
+                
+        self.root.after(0, _add)
+
+    def show_target_arrow(self, rect):
+        """Draw a high-visibility diagonal arrow and a box around the target area."""
+        if not hasattr(self, 'current_ratio'): return
+        
+        rx1, ry1, rx2, ry2 = rect
+        ratio = self.current_ratio
+        
+        # Canvas coordinates (North anchor +10 offset)
+        tx1, ty1 = int(rx1 * ratio), int(ry1 * ratio) + 10
+        tx2, ty2 = int(rx2 * ratio), int(ry2 * ratio) + 10
+        center_x = (tx1 + tx2) // 2
+        center_y = (ty1 + ty2) // 2
+        
+        # Clear previous indicators
+        self.canvas.delete("target_arrow")
+        
+        # 1. Draw a big high-visibility dashed box around the area
+        # Outline with black first for contrast, then bright yellow
+        padding = 10
+        self.canvas.create_rectangle(tx1-padding-2, ty1-padding-2, tx2+padding+2, ty2+padding+2, 
+                                    outline="black", width=5, tags="target_arrow")
+        self.canvas.create_rectangle(tx1-padding, ty1-padding, tx2+padding, ty2+padding, 
+                                    outline="#FFFF00", width=3, dash=(8, 4), tags="target_arrow")
+        
+        # 2. Draw a thick diagonal arrow pointing to the corner
+        # Starting from top-left offset
+        start_x, start_y = tx1 - 80, ty1 - 80
+        end_x, end_y = tx1 - 5, ty1 - 5
+        
+        # Shadow for arrow
+        self.canvas.create_line(start_x+2, start_y+2, end_x+2, end_y+2, 
+                                arrow=LAST, fill="black", width=8, tags="target_arrow", arrowshape=(25, 30, 12))
+        # Main arrow
+        self.canvas.create_line(start_x, start_y, end_x, end_y, 
+                                arrow=LAST, fill="#FF6600", width=6, tags="target_arrow", arrowshape=(25, 30, 12))
+        
+        # Label with shadow
+        self.canvas.create_text(start_x+2, start_y-18, text="FOCUS", fill="black", 
+                                font=("Helvetica", 16, "bold"), tags="target_arrow")
+        self.canvas.create_text(start_x, start_y-20, text="FOCUS", fill="#FFFF00", 
+                                font=("Helvetica", 16, "bold"), tags="target_arrow")
+
+    def hide_target_arrow(self):
+        self.canvas.delete("target_arrow")
 
     def analysis_done(self):
         self.is_analyzing = False
