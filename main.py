@@ -12,11 +12,14 @@ import time
 import threading
 import json
 from splicing_logic import SplicingProcessor
+import re
+
+VERSION = "1.1.5"
 
 class SplicingGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("動態拼接檢查系統 (Dynamic Splicing Check System) - V1.0")
+        self.root.title(f"動態拼接檢查系統 (Dynamic Splicing Check System) - V{VERSION}")
         self.root.geometry("1400x900")
         
         # Global Default Parameters (Synchronized with User Latest Request)
@@ -45,6 +48,10 @@ class SplicingGUI:
         self.diff_thd_var = tk.DoubleVar()
         self.rate_thd_var = tk.DoubleVar()
         self.fail_thd_var = tk.IntVar()
+        self.check_distortion_var = tk.BooleanVar(value=False)
+        self.dist_thd_var = tk.DoubleVar(value=1.12)
+        self.mag_factor_var = tk.DoubleVar(value=1.5)
+        self.version_var = tk.StringVar(value=VERSION)
         
         # Lists to store widgets for dynamic font updates
         self.font_widgets_labels = []
@@ -52,6 +59,7 @@ class SplicingGUI:
         
         # State variables
         self.is_analyzing = False
+        self.hide_overlay_for_mag = False
         self.stop_event = threading.Event()
         self.results_data = []
         self.current_image_path = None
@@ -65,6 +73,12 @@ class SplicingGUI:
         self.root.bind("<Configure>", self.on_window_resize)
         self.gui_font_size_var.trace_add("write", lambda *args: self.apply_ui_font())
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        
+        # Magnifier Setup
+        self.mag_canvas = None
+        self.canvas.bind("<Motion>", self.update_magnifier)
+        self.canvas.bind("<Leave>", self.hide_magnifier)
+        
         self.apply_ui_font() # Initial font apply
 
     def setup_ui(self):
@@ -157,40 +171,44 @@ class SplicingGUI:
         self.manual_text_widget = help_text_tab # Store for font update
 
         manual_content = """
-■ 核心參數詳細說明 (Algorithm Parameters Guidance)
+■ 系統核心設計說明 (System Core Design)
+
+本系統專為「四線條紋圖」(4-line stripe pattern) 進行精密的幾何與色彩一致性檢查而設計。
+
+1. 檢查原理 - 為什麼是四線條紋？
+--------------------------------------------
+系統透過尋找標靶中的 紅(R)、綠(G)、藍(B) 及 白色(White/Gray) 條紋邊界來判讀拼接品質。
+- 分段偵測：將條紋分為三組（紅綠、綠藍、藍白拼接處）獨立計算像素位移 (Pixel Shift)。
+- 參數鎖定：系統內置了針對 100cm 測試距離設計的特定參數 (如 hlimit, Pitch)，以確保高精度。
+
+2. 歪曲檢查 (Distortion) 的侷限性
+--------------------------------------------
+本系統為「拼接處對齊檢查員」，而非全圖「鏡頭畸變測試儀」。
+- 能檢測到：若歪曲發生在四線標靶所在的局部區域，導致條紋斷裂、傾斜或錯位，系統會報 FAIL。
+- 檢測不到：若歪曲發生在沒有標靶的區域（如全圖中間或邊緣偏置），即使有幾何變形，只要拼接點有對齊，系統仍可能判定為 PASS。
+
+3. 常見狀態說明
+--------------------------------------------
+- ROI_SELECTOR_ERROR：代表系統找不到紅色標記點，可能是圖片太暗、位置偏移過大或完全沒拍到標靶。
+- Pixel Shift 數值過大：若偵測到條紋邊緣不再垂直或有嚴重重影，Pixel Shift 會飆高，進而判定為 NG。
+
+■ 核心參數說明 (Algorithm Parameters)
 
 1. 差異閾值 (Diff Threshold)
 --------------------------------------------
-【定義】用於判定影像中「邊緣強度」的門檻值。
-【作用】系統會計算相鄰像素的亮度差異，若數值大於此閾值，才會被認定為一條「有效的刻度邊緣」。
-【調校提示】
-   - 若影像太暗、條紋不明顯，請調低此值 (例如 8)。
-   - 若影像雜訊太多、造成誤判，請調高此值 (例如 15)。
-【建議預設值】18
+用於判定邊緣強度的門檻。數值愈小愈靈敏（易受雜訊干擾），數值愈大愈遲鈍。建議值：18。
 
 2. 比率閾值 (Rate Threshold)
 --------------------------------------------
-【定義】主波峰與次波峰的比例門檻（鬼影判定強度）。
-【作用】分析拼接處是否存在「重影」。系統會提取最強與次強的邊緣訊號，只有當兩者比率在此範圍內，才會判定為拼接像素位移。
-【調校提示】
-   - 若遇到影像本身就很模糊的情況，可能需要拉高此值以避免誤判。
-【建議預設值】0.18
+用於判定「鬼影/重影」。分析主次波峰的比率，若重影超過此比例則計入位移。建議值：0.18。
 
-3. 不合格判定值 (Fail Threshold)
+3. 不合格判定值 (Fail Threshold px)
 --------------------------------------------
-【定義】檢測結果合格與否的像素臨界點。
-【作用】這是一條標準線。
-   - Pixel Shift < 此值：判定為 PASS (顯示綠色/OK)。
-   - Pixel Shift >= 此值：判定為 FAIL (顯示紅色/NG)。
-【建議預設值】4 px
+判定為 FAIL 的臨界點。Pixel Shift >= 此值即顯示為紅色(NG)。建議值：4 px。
 
-4. 定位邏輯簡述 (Find_Center_ROI)
+4. 定位邏輯 (Find_Center_ROI)
 --------------------------------------------
-系統會將全圖切分為 4 個區塊 (Cam0..3)，並在每個區塊內利用「R/G/B 色彩過濾」尋找最純粹的紅色條紋作為校正參考點。
-
-5. 輸出格式說明 (spec_issue)
---------------------------------------------
-日誌中輸出的數值若變為紅色，即代表該項指標已超過不合格判定值，需人工介入確認。
+利用「RGB 色彩過濾」鎖定紅色標記點，作為後續掃描條紋的基準座標。
         """
         help_text_tab.insert(END, manual_content)
         help_text_tab.config(state=DISABLED) # Make read-only
@@ -199,25 +217,62 @@ class SplicingGUI:
         settings_container = ttk.Frame(self.settings_tab, padding=30)
         settings_container.pack(fill=BOTH, expand=YES)
         
-        # NEW: Font Size Control (v1.1)
-        font_frame = ttk.LabelFrame(settings_container, text="介面調整 (UI Adjustment)", padding=20)
-        font_frame.pack(fill=X, pady=(0, 10))
-        self.font_widgets_labels.append(font_frame) # Added for title font
+        # NEW: Font & Version Control (v1.1)
+        ver_font_frame = ttk.LabelFrame(settings_container, text="系統與開發 (System & Version)", padding=20)
+        ver_font_frame.pack(anchor=W, pady=(0, 10)) # Left-aligned and narrow
+        self.font_widgets_labels.append(ver_font_frame)
         
-        lbl_font = ttk.Label(font_frame, text="全域字體大小 (Global Font Size):", font=("Helvetica", 12))
-        lbl_font.pack(anchor=W)
+        # Version Input
+        ver_row = ttk.Frame(ver_font_frame)
+        ver_row.pack(fill=X, pady=5)
+        lbl_ver = ttk.Label(ver_row, text="目前系統版本 (System Version):", font=("Helvetica", 11))
+        lbl_ver.pack(side=LEFT)
+        self.font_widgets_labels.append(lbl_ver)
+        
+        self.ver_entry = ttk.Entry(ver_row, textvariable=self.version_var, width=15)
+        self.ver_entry.pack(side=LEFT, padx=10)
+        self.font_widgets_buttons.append(self.ver_entry) # Add entry for font update
+        
+        btn_update_ver = ttk.Button(ver_row, text="💾 更新版本號", bootstyle=INFO, command=self.update_version_source)
+        btn_update_ver.pack(side=LEFT)
+        self.font_widgets_buttons.append(btn_update_ver)
+        ToolTip(btn_update_ver, text="將此版本號寫入原始碼並套用。下次打包 EXE 會自動讀取此值。")
+
+        # Font size row with tight alignment (Left-aligned)
+        font_row = ttk.Frame(ver_font_frame)
+        font_row.pack(fill=X, pady=(15, 0))
+        
+        lbl_font = ttk.Label(font_row, text="全域字體大小 (Global Font Size):", font=("Helvetica", 11), width=40)
+        lbl_font.grid(row=0, column=0, sticky=W)
         self.font_widgets_labels.append(lbl_font)
         
-        font_slider = ttk.Scale(font_frame, from_=9, to=15, variable=self.gui_font_size_var, orient=HORIZONTAL)
-        font_slider.pack(fill=X, pady=5)
+        font_slider = ttk.Scale(font_row, from_=9, to=15, variable=self.gui_font_size_var, orient=HORIZONTAL, length=250)
+        font_slider.grid(row=0, column=1, sticky=W) 
         ToolTip(font_slider, text="範圍：9pt ~ 15pt，預設：12pt。調整後會即時對應到按鈕與說明文字。")
         
-        self.font_size_label = ttk.Label(font_frame, text="12", font=("Helvetica", 12, "bold"))
-        self.font_size_label.pack(anchor=E)
+        self.font_size_label = ttk.Label(font_row, text="12", font=("Helvetica", 12, "bold"), width=5, anchor=W)
+        self.font_size_label.grid(row=0, column=2, sticky=W, padx=(20, 0))
         self.font_widgets_labels.append(self.font_size_label)
 
+        # Magnifier Scale row (Moved here)
+        mag_row = ttk.Frame(ver_font_frame)
+        mag_row.pack(fill=X, pady=(15, 0))
+        
+        lbl_mag = ttk.Label(mag_row, text="放大鏡倍率 (Magnifier Scale):", font=("Helvetica", 12), width=40)
+        lbl_mag.grid(row=0, column=0, sticky=W)
+        self.font_widgets_labels.append(lbl_mag)
+        
+        mag_slider = ttk.Scale(mag_row, from_=0.5, to=2.0, variable=self.mag_factor_var, orient=HORIZONTAL, length=250)
+        mag_slider.grid(row=0, column=1, sticky=W) 
+        ToolTip(mag_slider, text="[視覺輔助]\n調整檢視圖片時的局部放大倍率。\n範圍：0.5x ~ 2.0x")
+        self.mag_factor_var.trace_add("write", lambda *args: self.mag_label.config(text=f"{self.mag_factor_var.get():.2f}x"))
+
+        self.mag_label = ttk.Label(mag_row, text="1.50x", font=("Helvetica", 12, "bold"), width=5, anchor=W)
+        self.mag_label.grid(row=0, column=2, sticky=W, padx=(20, 0))
+        self.font_widgets_labels.append(self.mag_label)
+
         param_frame = ttk.LabelFrame(settings_container, text="算法控制 (Algorithm Control)", padding=20)
-        param_frame.pack(fill=X, pady=10)
+        param_frame.pack(anchor=W, pady=10) # Left-aligned and narrow
         self.font_widgets_labels.append(param_frame) # Added for title font
         
         # Auto Analyze Toggle
@@ -229,57 +284,85 @@ class SplicingGUI:
         
         self.auto_clear_chk = ttk.Checkbutton(param_frame, text="載入時自動清空日誌 (Auto-Clear Log)", 
                                              variable=self.auto_clear_log_var, bootstyle="round-toggle")
-        self.auto_clear_chk.pack(anchor=W, pady=(0, 20))
+        self.auto_clear_chk.pack(anchor=W, pady=(0, 10))
         self.font_widgets_labels.append(self.auto_clear_chk)
         ToolTip(self.auto_clear_chk, text="啟用後，載入新圖片或資料夾時會自動清除之前的日誌內容。")
+
+        # Distortion Check Toggle
+        self.distortion_chk = ttk.Checkbutton(param_frame, text="✅ 檢查畸變 (Distortion Check)", 
+                                             variable=self.check_distortion_var, bootstyle="round-toggle")
+        self.distortion_chk.pack(anchor=W, pady=(0, 20))
+        self.font_widgets_labels.append(self.distortion_chk)
+        ToolTip(self.distortion_chk, text="額外掃描圖片其他區域，檢查幾何形狀是否發生不合理扭曲（例如圓形變橢圓）。")
         
-        # Differential Threshold
-        lbl_diff = ttk.Label(param_frame, text="差異閾值 (Diff Threshold):", font=("Helvetica", 12))
-        lbl_diff.pack(anchor=W)
+        # Parameters Grid Container for tight alignment (Left-aligned)
+        param_grid = ttk.Frame(param_frame)
+        param_grid.pack(fill=X, pady=10)
+        
+        # Differential Threshold row
+        lbl_diff = ttk.Label(param_grid, text="差異閾值 (Diff Threshold):", font=("Helvetica", 12), width=40)
+        lbl_diff.grid(row=0, column=0, sticky=W, pady=10)
         self.font_widgets_labels.append(lbl_diff)
         
-        self.diff_slider = ttk.Scale(param_frame, from_=0, to=50, variable=self.diff_thd_var, orient=HORIZONTAL)
-        self.diff_slider.pack(fill=X, pady=5)
-        ToolTip(self.diff_slider, text="[邊緣偵測靈敏度]\n數值愈小愈靈敏，數值愈大愈遲鈍。\n建議值：18")
-        self.diff_label = ttk.Label(param_frame, text="18", font=("Helvetica", 12, "bold"))
-        self.diff_label.pack(anchor=E)
-        self.font_widgets_labels.append(self.diff_label)
+        self.diff_slider = ttk.Scale(param_grid, from_=0, to=50, variable=self.diff_thd_var, orient=HORIZONTAL, length=250)
+        self.diff_slider.grid(row=0, column=1, sticky=W)
+        ToolTip(self.diff_slider, text="[邊緣偵測靈敏度]\n數值愈小愈靈敏（易受雜訊影響），數值愈大愈遲鈍。\n用於判定條紋與背景之間的明暗邊界強度。建議：18")
         self.diff_thd_var.trace_add("write", lambda *args: self.update_labels())
+
+        self.diff_label = ttk.Label(param_grid, text="18", font=("Helvetica", 12, "bold"), width=5, anchor=W)
+        self.diff_label.grid(row=0, column=2, sticky=W, pady=10, padx=(20, 0))
+        self.font_widgets_labels.append(self.diff_label)
         
-        # Rate Threshold
-        lbl_rate = ttk.Label(param_frame, text="比率閾值 (Rate Threshold):", font=("Helvetica", 12))
-        lbl_rate.pack(anchor=W, pady=(15, 0))
+        # Rate Threshold row
+        lbl_rate = ttk.Label(param_grid, text="比率閾值 (Rate Threshold):", font=("Helvetica", 12), width=40)
+        lbl_rate.grid(row=1, column=0, sticky=W, pady=10)
         self.font_widgets_labels.append(lbl_rate)
         
-        self.rate_slider = ttk.Scale(param_frame, from_=0.0, to=0.5, variable=self.rate_thd_var, orient=HORIZONTAL)
-        self.rate_slider.pack(fill=X, pady=5)
-        ToolTip(self.rate_slider, text="[鬼影判定強度]\n建議值：0.18")
-        self.rate_label = ttk.Label(param_frame, text="0.18", font=("Helvetica", 12, "bold"))
-        self.rate_label.pack(anchor=E)
-        self.font_widgets_labels.append(self.rate_label)
+        self.rate_slider = ttk.Scale(param_grid, from_=0.0, to=0.5, variable=self.rate_thd_var, orient=HORIZONTAL, length=250)
+        self.rate_slider.grid(row=1, column=1, sticky=W)
+        ToolTip(self.rate_slider, text="[鬼影判定強度]\n分析條紋剖面的次要波峰比率。\n若重影訊號超過此比例，則計入位移偏差。建議：0.18")
         self.rate_thd_var.trace_add("write", lambda *args: self.update_labels())
 
-        # Fail Threshold
-        lbl_fail = ttk.Label(param_frame, text="不合格判定值 (Fail Threshold px):", font=("Helvetica", 12))
-        lbl_fail.pack(anchor=W, pady=(15, 0))
+        self.rate_label = ttk.Label(param_grid, text="0.18", font=("Helvetica", 12, "bold"), width=5, anchor=W)
+        self.rate_label.grid(row=1, column=2, sticky=W, pady=10, padx=(20, 0))
+        self.font_widgets_labels.append(self.rate_label)
+
+        # Distortion Threshold row
+        lbl_dist_thd = ttk.Label(param_grid, text="畸變判定閾值 (Distortion Threshold):", font=("Helvetica", 12), width=40)
+        lbl_dist_thd.grid(row=2, column=0, sticky=W, pady=10)
+        self.font_widgets_labels.append(lbl_dist_thd)
+        
+        self.dist_thd_slider = ttk.Scale(param_grid, from_=1.01, to=1.50, variable=self.dist_thd_var, orient=HORIZONTAL, length=250)
+        self.dist_thd_slider.grid(row=2, column=1, sticky=W)
+        ToolTip(self.dist_thd_slider, text="[畸變容忍門檻]\n判定區域內幾何形狀（如圓形度或Pitch）的誤差比例。\n1.10 代表 10% 變形量。數值愈小愈嚴格。建議：1.12")
+        self.dist_thd_var.trace_add("write", lambda *args: self.update_labels())
+
+        self.dist_thd_label = ttk.Label(param_grid, text="1.12", font=("Helvetica", 12, "bold"), width=5, anchor=W)
+        self.dist_thd_label.grid(row=2, column=2, sticky=W, pady=10, padx=(20, 0))
+        self.font_widgets_labels.append(self.dist_thd_label)
+
+        # Fail Threshold row
+        lbl_fail = ttk.Label(param_grid, text="不合格判定值 (Fail Threshold px):", font=("Helvetica", 12), width=40)
+        lbl_fail.grid(row=3, column=0, sticky=W, pady=10)
         self.font_widgets_labels.append(lbl_fail)
         
-        self.fail_slider = ttk.Scale(param_frame, from_=1, to=15, variable=self.fail_thd_var, orient=HORIZONTAL)
-        self.fail_slider.pack(fill=X, pady=5)
-        ToolTip(self.fail_slider, text="[標準線設定]\n建議值：4")
-        self.fail_label = ttk.Label(param_frame, text="4", font=("Helvetica", 12, "bold"))
-        self.fail_label.pack(anchor=E)
-        self.font_widgets_labels.append(self.fail_label)
+        self.fail_slider = ttk.Scale(param_grid, from_=1, to=15, variable=self.fail_thd_var, orient=HORIZONTAL, length=250)
+        self.fail_slider.grid(row=3, column=1, sticky=W)
+        ToolTip(self.fail_slider, text="[判定標準線]\n單點 Pixel Shift 允許的最大像素位移。\n超過此值(NG)該點標示為紅色。建議：4")
         self.fail_thd_var.trace_add("write", lambda *args: self.update_labels())
 
-        # Reset Button at the bottom of settings
-        btn_reset = ttk.Button(settings_container, text="🔄 恢復預設參數", bootstyle=WARNING, 
+        self.fail_label = ttk.Label(param_grid, text="4", font=("Helvetica", 12, "bold"), width=5, anchor=W)
+        self.fail_label.grid(row=3, column=2, sticky=W, pady=10, padx=(20, 0))
+        self.font_widgets_labels.append(self.fail_label)
+
+        # Reset Button (Moved inside Algorithm Control frame)
+        btn_reset = ttk.Button(param_frame, text="🔄 恢復預設參數", bootstyle=WARNING, 
                                command=self.reset_defaults)
-        btn_reset.pack(pady=20)
+        btn_reset.pack(pady=(10, 0))
         self.font_widgets_buttons.append(btn_reset)
-        
+
         # Version Label
-        self.ver_label = ttk.Label(settings_container, text="Version: 1.0.0", font=("Helvetica", 10), foreground="gray")
+        self.ver_label = ttk.Label(settings_container, text=f"Version: {VERSION}", font=("Helvetica", 10), foreground="gray")
         self.ver_label.pack(side=BOTTOM, pady=10)
         self.font_widgets_labels.append(self.ver_label)
         
@@ -299,7 +382,10 @@ class SplicingGUI:
             "diff_thd": self.DEFAULT_DIFF,
             "rate_thd": self.DEFAULT_RATE,
             "fail_thd": self.DEFAULT_FAIL,
-            "gui_font_size": 12
+            "gui_font_size": 12,
+            "check_distortion": False,
+            "dist_thd": 1.12,
+            "mag_factor": 1.5
         }
         
         if os.path.exists(self.config_path):
@@ -315,6 +401,9 @@ class SplicingGUI:
         self.rate_thd_var.set(self.gui_config.get("rate_thd", self.DEFAULT_RATE))
         self.fail_thd_var.set(self.gui_config.get("fail_thd", self.DEFAULT_FAIL))
         self.gui_font_size_var.set(self.gui_config.get("gui_font_size", 12))
+        self.check_distortion_var.set(self.gui_config.get("check_distortion", False))
+        self.dist_thd_var.set(self.gui_config.get("dist_thd", 1.12))
+        self.mag_factor_var.set(self.gui_config.get("mag_factor", 1.5))
         self.last_dir = self.gui_config.get("last_dir", self.last_dir)
         
         # Apply window geometry
@@ -333,6 +422,9 @@ class SplicingGUI:
             self.gui_config["rate_thd"] = self.rate_thd_var.get()
             self.gui_config["fail_thd"] = self.fail_thd_var.get()
             self.gui_config["gui_font_size"] = self.gui_font_size_var.get()
+            self.gui_config["check_distortion"] = self.check_distortion_var.get()
+            self.gui_config["dist_thd"] = self.dist_thd_var.get()
+            self.gui_config["mag_factor"] = self.mag_factor_var.get()
             
             with open(self.config_path, 'w') as f:
                 json.dump(self.gui_config, f)
@@ -407,22 +499,45 @@ class SplicingGUI:
         size = self.gui_font_size_var.get()
         self.font_size_label.config(text=str(size))
         
-        # Update labels font (Helvetica)
+        # Update Global Styles
+        self.style.configure(".", font=("Helvetica", size))
+        self.style.configure("TNotebook.Tab", font=("Helvetica", size))
+        self.style.configure("TLabelframe.Label", font=("Helvetica", size, "bold"))
+        
+        # Update labels & Checkbuttons
         for lbl in self.font_widgets_labels:
             try:
-                # Keep bold for status labels
-                is_bold = "bold" in str(lbl.cget("font"))
+                # Keep bold for status labels and results
+                is_bold = False
+                try:
+                    current_font = lbl.cget("font")
+                    if current_font:
+                        is_bold = "bold" in str(current_font).lower()
+                except: pass
+                
+                # Special check for widgets that might have specific font needs (like Checkbuttons)
+                if isinstance(lbl, (ttk.Checkbutton, ttk.RadioButton)):
+                     style_name = lbl.cget("style")
+                     if style_name:
+                         self.style.configure(style_name, font=("Helvetica", size))
+                
+                # Try standard config for text-based widgets
                 lbl.config(font=("Helvetica", size, "bold" if is_bold else "normal"))
-            except: pass
+            except: 
+                # If direct config fails, try styling
+                try:
+                    style_name = lbl.cget("style")
+                    if style_name:
+                        self.style.configure(style_name, font=("Helvetica", size))
+                except: pass
             
-        # Update buttons font
+        # Update buttons & Entries font
         for btn in self.font_widgets_buttons:
             try:
-                # Use style configuration for ttkbootstrap buttons to ensure it sticks
                 style_name = btn.cget("style")
                 if style_name:
                     self.style.configure(style_name, font=("Helvetica", size))
-                # Fallback direct config
+                
                 btn.configure(font=("Helvetica", size))
             except: pass
             
@@ -433,20 +548,33 @@ class SplicingGUI:
         # Update Status Bar
         if hasattr(self, 'status_bar'):
             self.status_bar.configure(font=("Helvetica", size))
-            
-        # Special handling for LabelFrame titles which are tricky in ttk
-        for widget in self.font_widgets_labels:
-            if isinstance(widget, ttk.LabelFrame):
-                # ttkbootstrap uses 'label' attribute for LabelFrame titles
-                try:
-                    widget.configure(font=("Helvetica", size, "bold"))
-                except:
-                    pass
 
     def update_labels(self):
         self.diff_label.config(text=f"{int(self.diff_thd_var.get())}")
         self.rate_label.config(text=f"{self.rate_thd_var.get():.2f}")
+        self.dist_thd_label.config(text=f"{self.dist_thd_var.get():.2f}")
         self.fail_label.config(text=f"{int(self.fail_thd_var.get())}")
+
+    def update_version_source(self):
+        new_ver = self.version_var.get().strip()
+        if not new_ver: return
+        
+        try:
+            # Meta-update: Rewrite main.py to sync version for build_exe.bat
+            with open(__file__, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            with open(__file__, 'w', encoding='utf-8') as f:
+                for line in lines:
+                    if line.startswith('VERSION ='):
+                        f.write(f'VERSION = "{new_ver}"\n')
+                    else:
+                        f.write(line)
+            
+            self.ver_label.config(text=f"Version: {new_ver}")
+            tk.messagebox.showinfo("成功", f"版本號已更新為 {new_ver}\n下次打包 EXE 將會生效。")
+        except Exception as e:
+            tk.messagebox.showerror("錯誤", f"無法更新版本號文件: {str(e)}")
 
     def clear_log(self):
         self.log_area.delete('1.0', END)
@@ -531,9 +659,23 @@ class SplicingGUI:
             # Always ensure a new object for drawing
             img_resized = img_original.resize((new_w, new_h), Image.LANCZOS)
             
+            # If magnifier is active, skip the overlay to allow clear view
+            if self.hide_overlay_for_mag:
+                overlay_info = None
+
             if overlay_info:
                 draw = ImageDraw.Draw(img_resized)
-                rect = overlay_info.get('rect') 
+
+                # 1. Draw Distortion Debug Boxes first (Bottom layer)
+                dist_boxes = overlay_info.get('dist_boxes', [])
+                for db in dist_boxes:
+                    dbx1, dby1, dbx2, dby2 = db
+                    dbx1, dby1 = int(dbx1 * ratio), int(dby1 * ratio)
+                    dbx2, dby2 = int(dbx2 * ratio), int(dby2 * ratio)
+                    draw.rectangle([dbx1, dby1, dbx2, dby2], outline="#00FFFF", width=2)
+
+                # 2. Draw normal detection rects
+                rect = overlay_info.get('rect')
                 status_text = overlay_info.get('text', "")
                 status = overlay_info.get('status', 'checking') 
                 
@@ -541,7 +683,49 @@ class SplicingGUI:
                 if status == 'pass': color = "#00FF00"
                 if status == 'fail': color = "#FF0000"
                 
-                # Giant Final Result Overlay
+                # Regular per-target status text - Scale font size with image
+                try:
+                    from PIL import ImageFont
+                    # Make scanning text bigger as requested
+                    font_size = max(28, int(50 * ratio))
+                    target_font = None
+                    font_paths = ["C:\\Windows\\Fonts\\arialbd.ttf", "arial.ttf"]
+                    for fp in font_paths:
+                        if os.path.exists(fp):
+                            target_font = ImageFont.truetype(fp, font_size)
+                            break
+                except:
+                    target_font = None
+                
+                if rect:
+                    rx1, ry1, rx2, ry2 = rect
+                    rx1 = int(rx1 * ratio)
+                    ry1 = int(ry1 * ratio)
+                    rx2 = int(rx2 * ratio)
+                    ry2 = int(ry2 * ratio)
+                    
+                    if (rx2 - rx1) < 20: rx1, rx2 = rx1 - 10, rx2 + 10
+                    if (ry2 - ry1) < 20: ry1, ry2 = ry1 - 10, ry2 + 10
+
+                    for i in range(4):
+                        draw.rectangle([rx1-i, ry1-i, rx2+i, ry2+i], outline=color, width=3)
+                    
+                    # Draw high-contrast black background for text
+                    text_str = status_text
+                    try:
+                        t_bbox = draw.textbbox((rx1, ry1 - font_size - 10), text_str, font=target_font)
+                        # Add some padding to the background box
+                        bg_padding = 5
+                        bg_label = [t_bbox[0]-bg_padding, t_bbox[1]-bg_padding, t_bbox[2]+bg_padding, t_bbox[3]+bg_padding]
+                        draw.rectangle(bg_label, fill=(0, 0, 0, 180)) # Semi-transparent black
+                    except:
+                        # Fallback if textbbox is missing
+                        draw.rectangle([rx1, ry1 - font_size - 15, rx1 + 300, ry1 - 5], fill=(0, 0, 0, 180))
+                        
+                    # Draw status text on top of the black box
+                    draw.text((rx1, ry1 - font_size - 10), text_str, fill=color, font=target_font)
+
+                # 3. Draw Watermark Final Result (Top Layer)
                 final_res = overlay_info.get('final_result')
                 if final_res:
                     # Draw semi-transparent black overlay
@@ -574,54 +758,84 @@ class SplicingGUI:
                         tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
                     draw.text(((new_w - tw)//2, (new_h - th)//2), res_text, fill=res_color, font=font)
                 
-                else:
-                    # Regular per-target status text - Scale font size with image
-                    try:
-                        from PIL import ImageFont
-                        # Make scanning text bigger as requested
-                        font_size = max(28, int(50 * ratio))
-                        target_font = None
-                        font_paths = ["C:\\Windows\\Fonts\\arialbd.ttf", "arial.ttf"]
-                        for fp in font_paths:
-                            if os.path.exists(fp):
-                                target_font = ImageFont.truetype(fp, font_size)
-                                break
-                    except:
-                        target_font = None
-                    
-                    if rect:
-                        rx1, ry1, rx2, ry2 = rect
-                        rx1 = int(rx1 * ratio)
-                        ry1 = int(ry1 * ratio)
-                        rx2 = int(rx2 * ratio)
-                        ry2 = int(ry2 * ratio)
-                        
-                        if (rx2 - rx1) < 20: rx1, rx2 = rx1 - 10, rx2 + 10
-                        if (ry2 - ry1) < 20: ry1, ry2 = ry1 - 10, ry2 + 10
-
-                        for i in range(4):
-                            draw.rectangle([rx1-i, ry1-i, rx2+i, ry2+i], outline=color, width=3)
-                        
-                        # Draw high-contrast black background for text
-                        text_str = status_text
-                        try:
-                            t_bbox = draw.textbbox((rx1, ry1 - font_size - 10), text_str, font=target_font)
-                            # Add some padding to the background box
-                            bg_padding = 5
-                            bg_label = [t_bbox[0]-bg_padding, t_bbox[1]-bg_padding, t_bbox[2]+bg_padding, t_bbox[3]+bg_padding]
-                            draw.rectangle(bg_label, fill=(0, 0, 0, 180)) # Semi-transparent black
-                        except:
-                            # Fallback if textbbox is missing
-                            draw.rectangle([rx1, ry1 - font_size - 15, rx1 + 300, ry1 - 5], fill=(0, 0, 0, 180))
-                            
-                        # Draw status text on top of the black box
-                        draw.text((rx1, ry1 - font_size - 10), text_str, fill=color, font=target_font)
 
             self.tk_img = ImageTk.PhotoImage(img_resized)
             self.canvas.delete("all")
             self.canvas.create_image(canvas_w//2, canvas_h//2, image=self.tk_img, anchor=CENTER)
+            
+            # Store resized image for magnifier source
+            self.current_resized_img = img_resized
+            self.current_ratio = ratio
+            
         except Exception as e:
             self.log(f"畫布顯示失敗: {str(e)}")
+
+    def update_magnifier(self, event):
+        if not hasattr(self, 'current_resized_img') or self.is_analyzing:
+            return
+            
+        x, y = event.x, event.y
+        # Get canvas center offset
+        cw = self.canvas.winfo_width()
+        ch = self.canvas.winfo_height()
+        base_x = (cw - self.current_resized_img.width) // 2
+        base_y = (ch - self.current_resized_img.height) // 2
+        
+        # Check if cursor is on image
+        if base_x <= x < base_x + self.current_resized_img.width and \
+           base_y <= y < base_y + self.current_resized_img.height:
+            
+            # Source coordinates on the resized image
+            src_x = x - base_x
+            src_y = y - base_y
+            
+            mag_w = 400 # Longer width
+            mag_h = 200 # Height
+            mag = self.mag_factor_var.get()
+            
+            # Temporary hide overlay and redraw main image if needed
+            if not self.hide_overlay_for_mag:
+                self.hide_overlay_for_mag = True
+                self.redraw_current() # Redraw without overlay
+            
+            # Crop area on original image for better quality
+            # First map to original image coords
+            orig_x = src_x / self.current_ratio
+            orig_y = src_y / self.current_ratio
+            
+            # Crop dimensions in original pixels
+            rw = int((mag_w / 2) / mag / self.current_ratio)
+            rh = int((mag_h / 2) / mag / self.current_ratio)
+            
+            try:
+                # Need the original image
+                orig_img = self._cached_img
+                crop = orig_img.crop((orig_x - rw, orig_y - rh, orig_x + rw, orig_y + rh))
+                crop_resized = crop.resize((mag_w, mag_h), Image.LANCZOS)
+                
+                self.mag_tk_img = ImageTk.PhotoImage(crop_resized)
+                
+                if not self.mag_canvas:
+                    self.mag_canvas = self.canvas.create_image(x + 20, y + 20, image=self.mag_tk_img, anchor=NW)
+                else:
+                    self.canvas.coords(self.mag_canvas, x + 20, y + 20)
+                    self.canvas.itemconfig(self.mag_canvas, image=self.mag_tk_img)
+            except:
+                pass
+        else:
+            self.hide_magnifier()
+
+    def hide_magnifier(self, event=None):
+        if self.mag_canvas:
+            self.canvas.delete(self.mag_canvas)
+            self.mag_canvas = None
+        
+        if self.hide_overlay_for_mag:
+            self.hide_overlay_for_mag = False
+            # We don't necessarily need to redraw every time we move out, 
+            # only if we want the overlay back immediately.
+            # However, typically people use mag to see details, then move out to see result.
+            self.redraw_current()
 
     def safe_update_ui(self, path, overlay):
         try:
@@ -663,12 +877,14 @@ class SplicingGUI:
         if self.is_analyzing: return
         
         self.is_analyzing = True
+        self.notebook.select(0) # Auto-switch to Image View tab
         self.analyze_btn.config(state=DISABLED)
         self.status_var.set("分析中...")
         
         # Apply parameters
         self.processor.diff_thd = int(self.diff_thd_var.get())
         self.processor.rate_thd = self.rate_thd_var.get()
+        self.processor.dist_thd = self.dist_thd_var.get()
         
         threading.Thread(target=self.run_analysis_pipeline, daemon=True).start()
 
@@ -723,7 +939,8 @@ class SplicingGUI:
                 force_fail = step.get('force_fail')
                 
                 # Animation Start - Yellow Box
-                overlay = {'rect': step['rect'], 'text': "SCANNING", 'status': 'checking'}
+                # Use viz_rect if available for drawing, but calculation stays the same
+                overlay = {'rect': step.get('viz_rect', step['rect']), 'text': "SCANNING", 'status': 'checking'}
                 self.root.after(0, self.safe_update_ui, path, overlay.copy())
                 time.sleep(0.7) 
                 
@@ -784,6 +1001,30 @@ class SplicingGUI:
             
             avg_shift = sum(shift_vals) / len(shift_vals) if shift_vals else 0
             self.log(f"pixel_shift_avg = {avg_shift}")
+            
+            # --- GLOBAL DISTORTION CHECK ---
+            if self.check_distortion_var.get():
+                self.log("\n正在執行快速畸變掃描 (Global Distortion Scan)...")
+                is_distorted, max_ecc, found_cnt, dist_boxes = self.processor.check_distortion(cv_img)
+                
+                # Show detected boxes in the GUI for transparency
+                dist_steps = []
+                for box in dist_boxes:
+                    bx, by, bw, bh = box
+                    dist_steps.append((bx, by, bx+bw, by+bh))
+                
+                final_overlay = {
+                    'final_result': 'pass' if image_pass and not is_distorted else 'fail',
+                    'dist_boxes': dist_steps
+                }
+                self.root.after(0, self.safe_update_ui, path, final_overlay)
+
+                if is_distorted:
+                    self.log(f"  [NG] 偵測到明顯畸變 (最大變形比率: {max_ecc}, 樣本數: {found_cnt})")
+                    image_pass = False
+                else:
+                    self.log(f"  [OK] 幾何形狀正常 (最大變形比率: {max_ecc}, 樣本數: {found_cnt})")
+
             self.log("SPEC_PASS" if image_pass else "SPEC_FAIL")
             self.log("----------------------------------")
 

@@ -14,6 +14,7 @@ class SplicingProcessor:
         self.Pitch = [120, 110, 112]
         self.diff_thd = 10
         self.rate_thd = 0.1
+        self.dist_thd = 1.12
         
         self.limit_w1 = self.small_cam30 - 20
         self.limit_H1 = self.large_y - 20
@@ -265,10 +266,15 @@ class SplicingProcessor:
             else:
                 std_py = R_R_Py[i] - R_R_H[i]
             
+            delta_h = int(L_R_H[i])
+            # Restore processing 'rect' to exact original small size (30x28)
+            # Add 'viz_rect' for UI display
             final_steps.append({
                 'rect': (int(PX-self.roi_w), int(std_py-self.roi_ht), int(PX+self.roi_w), int(std_py+self.roi_hd)),
+                'viz_rect': (int(PX-80), int(std_py-10), int(PX+80), int(std_py + delta_h * 5 + 10)),
                 'px': PX,
                 'py': std_py,
+                'delta': delta_h,
                 'index': i,
                 'alignment_offset': alignment_offset,
                 'calibration': calibration
@@ -349,6 +355,63 @@ class SplicingProcessor:
             return white_disc, red_disc, green_disc, blue_disc
         except Exception:
             return 1.0, 1.0, 1.0, 1.0
+
+    def check_distortion(self, image):
+        """
+        Hyper-aggressive scan for geometric distortion and stitching breaks (steps).
+        Focuses on eccentricity of patterns and Y-jumps in horizontal features.
+        """
+        try:
+            h, w = image.shape[:2]
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            
+            # Small block size (7) for micro-detail sensitivity, C=1 to keep everything
+            binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, 
+                                          cv2.THRESH_BINARY_INV, 7, 1)
+            
+            contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            
+            max_ecc = 1.0
+            shape_cnt = 0
+            analysed_boxes = []
+            
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                # Catch very small artifacts that might represent a break (5 pixels)
+                if 5 < area < 1000000:
+                    x, y, cw, ch = cv2.boundingRect(cnt)
+                    shape_cnt += 1
+                    analysed_boxes.append((x, y, cw, ch))
+                    
+                    if len(cnt) >= 5:
+                        try:
+                            # 1. Eccentricity check (Ellipse fitting)
+                            if len(cnt) >= 6:
+                                _, (ma, mi), _ = cv2.fitEllipse(cnt)
+                                if mi > 0:
+                                    ecc = ma / mi
+                                    if ecc > max_ecc: max_ecc = ecc
+                            
+                            # 2. Stitching Break check (Step detection):
+                            # In a panoramic stitch, a broken line segment will have a 
+                            # bounding box with unusually high Height relative to its Width if it curves/jumps.
+                            if cw > 30: # Only look at significant horizontal features
+                                step_ratio = ch / (cw * 0.05 + 1.0) # Penalty for height in horizontal lines
+                                if step_ratio > max_ecc:
+                                    max_ecc = step_ratio
+                                    
+                            # 3. Orientation Check: 
+                            # If a long contour (line) is tilted more than it should be
+                            if cw > 30 and ch > 10:
+                                lean = ch / cw
+                                if lean > 0.5: # Suspected vertical warp or break
+                                    if lean * 2 > max_ecc: max_ecc = lean * 2
+                        except: continue
+
+            is_distorted = max_ecc > self.dist_thd
+            return is_distorted, round(max_ecc, 2), shape_cnt, analysed_boxes
+        except Exception:
+            return False, 1.0, 0, []
 
     def process_step(self, image, step_info):
         force_fail = step_info.get('force_fail')
