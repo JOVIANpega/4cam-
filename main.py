@@ -19,12 +19,13 @@ class SplicingGUI:
         self.root.title("動態拼接檢查系統 (Dynamic Splicing Check System) - V1.0")
         self.root.geometry("1400x900")
         
-        # Global Default Parameters (Synchronized with User Screenshot)
-        self.DEFAULT_DIFF = 10.0
-        self.DEFAULT_RATE = 0.1
-        self.DEFAULT_FAIL = 5
+        # Global Default Parameters (Synchronized with User Latest Request)
+        self.DEFAULT_DIFF = 18.0
+        self.DEFAULT_RATE = 0.18
+        self.DEFAULT_FAIL = 4
         self.auto_analyze_var = tk.BooleanVar(value=True)
         self.auto_clear_log_var = tk.BooleanVar(value=True)
+        self.gui_font_size_var = tk.IntVar(value=12)
         
         # Style
         self.style = ttk.Style(theme="darkly")
@@ -45,6 +46,10 @@ class SplicingGUI:
         self.rate_thd_var = tk.DoubleVar()
         self.fail_thd_var = tk.IntVar()
         
+        # Lists to store widgets for dynamic font updates
+        self.font_widgets_labels = []
+        self.font_widgets_buttons = []
+        
         # State variables
         self.is_analyzing = False
         self.stop_event = threading.Event()
@@ -58,7 +63,9 @@ class SplicingGUI:
         
         # Event bindings for persistence
         self.root.bind("<Configure>", self.on_window_resize)
+        self.gui_font_size_var.trace_add("write", lambda *args: self.apply_ui_font())
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.apply_ui_font() # Initial font apply
 
     def setup_ui(self):
         # Paned Window for adjustable split
@@ -78,28 +85,33 @@ class SplicingGUI:
         # Define a consistent width for all buttons
         BTN_WIDTH = 25
         
-        btn_load_single = ttk.Button(btn_container, text="📂 載入單張照片", width=BTN_WIDTH, bootstyle=PRIMARY, command=self.load_image)
-        btn_load_single.pack(pady=5)
+        btn_load_single = ttk.Button(btn_container, text="📂 載入單張照片", bootstyle=PRIMARY, command=self.load_image)
+        btn_load_single.pack(fill=X, pady=5)
+        self.font_widgets_buttons.append(btn_load_single)
         ToolTip(btn_load_single, text="選擇單個圖片檔案進行分析")
         
-        btn_load_folder = ttk.Button(btn_container, text="📁 載入資料夾", width=BTN_WIDTH, bootstyle=SECONDARY, command=self.load_folder)
-        btn_load_folder.pack(pady=5)
+        btn_load_folder = ttk.Button(btn_container, text="📁 載入資料夾", bootstyle=SECONDARY, command=self.load_folder)
+        btn_load_folder.pack(fill=X, pady=5)
+        self.font_widgets_buttons.append(btn_load_folder)
         ToolTip(btn_load_folder, text="選擇一個資料夾進行批次分析")
         
-        self.analyze_btn = ttk.Button(btn_container, text="🚀 開始分析", width=BTN_WIDTH, bootstyle=SUCCESS, command=self.start_analysis)
-        self.analyze_btn.pack(pady=15)
+        self.analyze_btn = ttk.Button(btn_container, text="🚀 開始分析", bootstyle=SUCCESS, command=self.start_analysis)
+        self.analyze_btn.pack(fill=X, pady=15)
+        self.font_widgets_buttons.append(self.analyze_btn)
         ToolTip(self.analyze_btn, text="開始執行拼接分析流程")
         
         # Log Control Buttons (Horizontal row)
         log_btn_frame = ttk.Frame(btn_container)
         log_btn_frame.pack(fill=X, pady=5)
         
-        self.copy_log_btn = ttk.Button(log_btn_frame, text="📋 複製日誌", width=11, bootstyle=INFO, command=self.copy_log)
-        self.copy_log_btn.pack(side=LEFT, padx=2)
+        self.copy_log_btn = ttk.Button(log_btn_frame, text="📋 複製日誌", bootstyle=INFO, command=self.copy_log)
+        self.copy_log_btn.pack(side=LEFT, fill=X, expand=YES, padx=2)
+        self.font_widgets_buttons.append(self.copy_log_btn)
         ToolTip(self.copy_log_btn, text="將日誌內容複製到剪貼簿")
         
-        self.clear_log_btn = ttk.Button(log_btn_frame, text="🗑️ 清空日誌", width=11, bootstyle=DANGER, command=self.clear_log)
-        self.clear_log_btn.pack(side=RIGHT, padx=2)
+        self.clear_log_btn = ttk.Button(log_btn_frame, text="🗑️ 清空日誌", bootstyle=DANGER, command=self.clear_log)
+        self.clear_log_btn.pack(side=RIGHT, fill=X, expand=YES, padx=2)
+        self.font_widgets_buttons.append(self.clear_log_btn)
         ToolTip(self.clear_log_btn, text="清除所有日誌文字")
         
         ttk.Separator(self.left_panel, orient=HORIZONTAL).pack(fill=X, pady=10)
@@ -109,6 +121,7 @@ class SplicingGUI:
         # Setup tags for coloring PASS/FAIL results
         self.log_area.tag_config("pass_text", foreground="#00FF00", font=("Consolas", 10, "bold"))
         self.log_area.tag_config("fail_text", foreground="#FF0000", font=("Consolas", 10, "bold"))
+        self.log_area.tag_config("blue_text", foreground="#00BFFF", font=("Consolas", 10, "bold"))
         
         # Debug ROI Preview
         self.roi_preview_label = ttk.Label(self.left_panel, text="目標區塊預覽 (Target ROI Preview)", font=("Helvetica", 10, "bold"))
@@ -135,50 +148,140 @@ class SplicingGUI:
         self.settings_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.settings_tab, text=" [ 參數設定 (Settings) ] ")
         
+        # --- TAB 3: Help / Documentation ---
+        self.help_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.help_tab, text=" [ 邏輯說明 (Manual) ] ")
+        
+        help_text_tab = ttk.ScrolledText(self.help_tab, font=("Microsoft JhengHei", 12))
+        help_text_tab.pack(fill=BOTH, expand=YES, padx=20, pady=20)
+        self.manual_text_widget = help_text_tab # Store for font update
+
+        manual_content = """
+■ 核心參數詳細說明 (Algorithm Parameters Guidance)
+
+1. 差異閾值 (Diff Threshold)
+--------------------------------------------
+【定義】用於判定影像中「邊緣強度」的門檻值。
+【作用】系統會計算相鄰像素的亮度差異，若數值大於此閾值，才會被認定為一條「有效的刻度邊緣」。
+【調校提示】
+   - 若影像太暗、條紋不明顯，請調低此值 (例如 8)。
+   - 若影像雜訊太多、造成誤判，請調高此值 (例如 15)。
+【建議預設值】18
+
+2. 比率閾值 (Rate Threshold)
+--------------------------------------------
+【定義】主波峰與次波峰的比例門檻（鬼影判定強度）。
+【作用】分析拼接處是否存在「重影」。系統會提取最強與次強的邊緣訊號，只有當兩者比率在此範圍內，才會判定為拼接像素位移。
+【調校提示】
+   - 若遇到影像本身就很模糊的情況，可能需要拉高此值以避免誤判。
+【建議預設值】0.18
+
+3. 不合格判定值 (Fail Threshold)
+--------------------------------------------
+【定義】檢測結果合格與否的像素臨界點。
+【作用】這是一條標準線。
+   - Pixel Shift < 此值：判定為 PASS (顯示綠色/OK)。
+   - Pixel Shift >= 此值：判定為 FAIL (顯示紅色/NG)。
+【建議預設值】4 px
+
+4. 定位邏輯簡述 (Find_Center_ROI)
+--------------------------------------------
+系統會將全圖切分為 4 個區塊 (Cam0..3)，並在每個區塊內利用「R/G/B 色彩過濾」尋找最純粹的紅色條紋作為校正參考點。
+
+5. 輸出格式說明 (spec_issue)
+--------------------------------------------
+日誌中輸出的數值若變為紅色，即代表該項指標已超過不合格判定值，需人工介入確認。
+        """
+        help_text_tab.insert(END, manual_content)
+        help_text_tab.config(state=DISABLED) # Make read-only
+        
         # Parameters Container in Settings Tab
         settings_container = ttk.Frame(self.settings_tab, padding=30)
         settings_container.pack(fill=BOTH, expand=YES)
         
+        # NEW: Font Size Control (v1.1)
+        font_frame = ttk.LabelFrame(settings_container, text="介面調整 (UI Adjustment)", padding=20)
+        font_frame.pack(fill=X, pady=(0, 10))
+        self.font_widgets_labels.append(font_frame) # Added for title font
+        
+        lbl_font = ttk.Label(font_frame, text="全域字體大小 (Global Font Size):", font=("Helvetica", 12))
+        lbl_font.pack(anchor=W)
+        self.font_widgets_labels.append(lbl_font)
+        
+        font_slider = ttk.Scale(font_frame, from_=9, to=15, variable=self.gui_font_size_var, orient=HORIZONTAL)
+        font_slider.pack(fill=X, pady=5)
+        ToolTip(font_slider, text="範圍：9pt ~ 15pt，預設：12pt。調整後會即時對應到按鈕與說明文字。")
+        
+        self.font_size_label = ttk.Label(font_frame, text="12", font=("Helvetica", 12, "bold"))
+        self.font_size_label.pack(anchor=E)
+        self.font_widgets_labels.append(self.font_size_label)
+
         param_frame = ttk.LabelFrame(settings_container, text="算法控制 (Algorithm Control)", padding=20)
         param_frame.pack(fill=X, pady=10)
+        self.font_widgets_labels.append(param_frame) # Added for title font
         
         # Auto Analyze Toggle
         self.auto_chk = ttk.Checkbutton(param_frame, text="載入後自動分析 (Auto-Analyze)", 
                                        variable=self.auto_analyze_var, bootstyle="round-toggle")
         self.auto_chk.pack(anchor=W, pady=(0, 10))
+        self.font_widgets_labels.append(self.auto_chk)
         ToolTip(self.auto_chk, text="啟用後，選取圖片或資料夾將自動啟動分析。")
         
         self.auto_clear_chk = ttk.Checkbutton(param_frame, text="載入時自動清空日誌 (Auto-Clear Log)", 
                                              variable=self.auto_clear_log_var, bootstyle="round-toggle")
         self.auto_clear_chk.pack(anchor=W, pady=(0, 20))
+        self.font_widgets_labels.append(self.auto_clear_chk)
         ToolTip(self.auto_clear_chk, text="啟用後，載入新圖片或資料夾時會自動清除之前的日誌內容。")
         
         # Differential Threshold
-        ttk.Label(param_frame, text="差異閾值 (Diff Threshold):", font=("Helvetica", 10)).pack(anchor=W)
+        lbl_diff = ttk.Label(param_frame, text="差異閾值 (Diff Threshold):", font=("Helvetica", 12))
+        lbl_diff.pack(anchor=W)
+        self.font_widgets_labels.append(lbl_diff)
+        
         self.diff_slider = ttk.Scale(param_frame, from_=0, to=50, variable=self.diff_thd_var, orient=HORIZONTAL)
         self.diff_slider.pack(fill=X, pady=5)
-        ToolTip(self.diff_slider, text="調整邊緣檢測的靈敏度。建議值：18。")
-        self.diff_label = ttk.Label(param_frame, text="10", font=("Helvetica", 12, "bold"))
+        ToolTip(self.diff_slider, text="[邊緣偵測靈敏度]\n數值愈小愈靈敏，數值愈大愈遲鈍。\n建議值：18")
+        self.diff_label = ttk.Label(param_frame, text="18", font=("Helvetica", 12, "bold"))
         self.diff_label.pack(anchor=E)
+        self.font_widgets_labels.append(self.diff_label)
         self.diff_thd_var.trace_add("write", lambda *args: self.update_labels())
         
         # Rate Threshold
-        ttk.Label(param_frame, text="比率閾值 (Rate Threshold):", font=("Helvetica", 10)).pack(anchor=W, pady=(15, 0))
+        lbl_rate = ttk.Label(param_frame, text="比率閾值 (Rate Threshold):", font=("Helvetica", 12))
+        lbl_rate.pack(anchor=W, pady=(15, 0))
+        self.font_widgets_labels.append(lbl_rate)
+        
         self.rate_slider = ttk.Scale(param_frame, from_=0.0, to=0.5, variable=self.rate_thd_var, orient=HORIZONTAL)
         self.rate_slider.pack(fill=X, pady=5)
-        ToolTip(self.rate_slider, text="調整判定鬼影比例。建議值：0.18。")
-        self.rate_label = ttk.Label(param_frame, text="0.10", font=("Helvetica", 12, "bold"))
+        ToolTip(self.rate_slider, text="[鬼影判定強度]\n建議值：0.18")
+        self.rate_label = ttk.Label(param_frame, text="0.18", font=("Helvetica", 12, "bold"))
         self.rate_label.pack(anchor=E)
+        self.font_widgets_labels.append(self.rate_label)
         self.rate_thd_var.trace_add("write", lambda *args: self.update_labels())
 
         # Fail Threshold
-        ttk.Label(param_frame, text="不合格判定值 (Fail Threshold px):", font=("Helvetica", 10)).pack(anchor=W, pady=(15, 0))
+        lbl_fail = ttk.Label(param_frame, text="不合格判定值 (Fail Threshold px):", font=("Helvetica", 12))
+        lbl_fail.pack(anchor=W, pady=(15, 0))
+        self.font_widgets_labels.append(lbl_fail)
+        
         self.fail_slider = ttk.Scale(param_frame, from_=1, to=15, variable=self.fail_thd_var, orient=HORIZONTAL)
         self.fail_slider.pack(fill=X, pady=5)
-        ToolTip(self.fail_slider, text="設定判定為 '不合格' 的最小偏移。建議值：5。")
-        self.fail_label = ttk.Label(param_frame, text="5", font=("Helvetica", 12, "bold"))
+        ToolTip(self.fail_slider, text="[標準線設定]\n建議值：4")
+        self.fail_label = ttk.Label(param_frame, text="4", font=("Helvetica", 12, "bold"))
         self.fail_label.pack(anchor=E)
+        self.font_widgets_labels.append(self.fail_label)
         self.fail_thd_var.trace_add("write", lambda *args: self.update_labels())
+
+        # Reset Button at the bottom of settings
+        btn_reset = ttk.Button(settings_container, text="🔄 恢復預設參數", bootstyle=WARNING, 
+                               command=self.reset_defaults)
+        btn_reset.pack(pady=20)
+        self.font_widgets_buttons.append(btn_reset)
+        
+        # Version Label
+        self.ver_label = ttk.Label(settings_container, text="Version: 1.0.0", font=("Helvetica", 10), foreground="gray")
+        self.ver_label.pack(side=BOTTOM, pady=10)
+        self.font_widgets_labels.append(self.ver_label)
         
         # Status Bar
         self.status_var = tk.StringVar(value="就緒")
@@ -195,7 +298,8 @@ class SplicingGUI:
             "last_dir": self.last_dir,
             "diff_thd": self.DEFAULT_DIFF,
             "rate_thd": self.DEFAULT_RATE,
-            "fail_thd": self.DEFAULT_FAIL
+            "fail_thd": self.DEFAULT_FAIL,
+            "gui_font_size": 12
         }
         
         if os.path.exists(self.config_path):
@@ -210,6 +314,7 @@ class SplicingGUI:
         self.diff_thd_var.set(self.gui_config.get("diff_thd", self.DEFAULT_DIFF))
         self.rate_thd_var.set(self.gui_config.get("rate_thd", self.DEFAULT_RATE))
         self.fail_thd_var.set(self.gui_config.get("fail_thd", self.DEFAULT_FAIL))
+        self.gui_font_size_var.set(self.gui_config.get("gui_font_size", 12))
         self.last_dir = self.gui_config.get("last_dir", self.last_dir)
         
         # Apply window geometry
@@ -227,6 +332,7 @@ class SplicingGUI:
             self.gui_config["diff_thd"] = self.diff_thd_var.get()
             self.gui_config["rate_thd"] = self.rate_thd_var.get()
             self.gui_config["fail_thd"] = self.fail_thd_var.get()
+            self.gui_config["gui_font_size"] = self.gui_font_size_var.get()
             
             with open(self.config_path, 'w') as f:
                 json.dump(self.gui_config, f)
@@ -262,10 +368,29 @@ class SplicingGUI:
             start_pos = self.log_area.index("end-1c")
             self.log_area.insert(END, message + "\n")
             
-            # Apply color tags based on content
-            if "PASS" in message or "[OK]" in message:
+            is_fail = False
+            # 1. Check for explicit FAIL keywords
+            if "FAIL" in message or "[NG]" in message:
+                is_fail = True
+            
+            # 2. Smart numeric check for spec_issue lines (e.g., PixelsShift_0=15.0)
+            if "PixelsShift" in message and "=" in message:
+                try:
+                    # Extract the value after '='
+                    val_str = message.split("=")[-1].strip()
+                    val = float(val_str)
+                    # Compare with current Fail Threshold from the slider
+                    if val >= self.fail_thd_var.get():
+                        is_fail = True
+                except (ValueError, IndexError):
+                    pass
+            
+            # Apply color tags
+            if "=================" in message or "參數值:" in message:
+                self.log_area.tag_add("blue_text", start_pos, "end-1c")
+            elif "PASS" in message or "[OK]" in message:
                 self.log_area.tag_add("pass_text", start_pos, "end-1c")
-            elif "FAIL" in message or "[NG]" in message:
+            elif is_fail:
                 self.log_area.tag_add("fail_text", start_pos, "end-1c")
                 
             self.log_area.see(END)
@@ -275,7 +400,48 @@ class SplicingGUI:
         self.diff_thd_var.set(self.DEFAULT_DIFF)
         self.rate_thd_var.set(self.DEFAULT_RATE)
         self.fail_thd_var.set(self.DEFAULT_FAIL)
+        self.gui_font_size_var.set(12)
         self.log("參數已恢復為預設值。")
+
+    def apply_ui_font(self):
+        size = self.gui_font_size_var.get()
+        self.font_size_label.config(text=str(size))
+        
+        # Update labels font (Helvetica)
+        for lbl in self.font_widgets_labels:
+            try:
+                # Keep bold for status labels
+                is_bold = "bold" in str(lbl.cget("font"))
+                lbl.config(font=("Helvetica", size, "bold" if is_bold else "normal"))
+            except: pass
+            
+        # Update buttons font
+        for btn in self.font_widgets_buttons:
+            try:
+                # Use style configuration for ttkbootstrap buttons to ensure it sticks
+                style_name = btn.cget("style")
+                if style_name:
+                    self.style.configure(style_name, font=("Helvetica", size))
+                # Fallback direct config
+                btn.configure(font=("Helvetica", size))
+            except: pass
+            
+        # Update Manual tab font (Microsoft JhengHei)
+        if hasattr(self, 'manual_text_widget'):
+            self.manual_text_widget.configure(font=("Microsoft JhengHei", size))
+            
+        # Update Status Bar
+        if hasattr(self, 'status_bar'):
+            self.status_bar.configure(font=("Helvetica", size))
+            
+        # Special handling for LabelFrame titles which are tricky in ttk
+        for widget in self.font_widgets_labels:
+            if isinstance(widget, ttk.LabelFrame):
+                # ttkbootstrap uses 'label' attribute for LabelFrame titles
+                try:
+                    widget.configure(font=("Helvetica", size, "bold"))
+                except:
+                    pass
 
     def update_labels(self):
         self.diff_label.config(text=f"{int(self.diff_thd_var.get())}")
@@ -316,6 +482,7 @@ class SplicingGUI:
             self.current_image_path = path
             self.batch_files = []
             self.display_image(path)
+            self.notebook.select(0) # Auto-switch to Image View tab
             self.log(f"已載入: {os.path.basename(path)}")
             if self.auto_analyze_var.get():
                 self.start_analysis()
@@ -332,6 +499,7 @@ class SplicingGUI:
                 self.batch_index = 0
                 self.current_image_path = self.batch_files[0]
                 self.display_image(self.current_image_path)
+                self.notebook.select(0) # Auto-switch to Image View tab
                 self.log(f"已載入資料夾: {folder} ({len(self.batch_files)} 張照片)")
                 if self.auto_analyze_var.get():
                     self.start_analysis()
@@ -525,6 +693,15 @@ class SplicingGUI:
             self.root.after(0, lambda p=path: self.display_image(p))
             # Critical: Allow UI to draw the basic image first
             time.sleep(0.1) 
+            
+            # Print current parameter info in the log (v1.1)
+            p_diff = int(self.diff_thd_var.get())
+            p_rate = self.rate_thd_var.get()
+            p_fail = int(self.fail_thd_var.get())
+            self.log(f"==================================")
+            self.log(f"參數值: Diff={p_diff}, Rate={p_rate:.2f}, Fail={p_fail}px")
+            self.log(f"==================================")
+            
             self.log(f"正在分析: {os.path.basename(path)}...")
             
             result = self.processor.analyze_image_prepare(path)
