@@ -14,7 +14,7 @@ import json
 from splicing_logic import SplicingProcessor
 import re
 
-VERSION = "1.1.9"
+VERSION = "1.2.0"
 
 class SplicingGUI:
     def __init__(self, root):
@@ -62,10 +62,14 @@ class SplicingGUI:
         self.is_analyzing = False
         self.hide_overlay_for_mag = False
         self.stop_event = threading.Event()
-        self.results_data = []
+        self.results_data = [] # CSV data
         self.current_image_path = None
         self.batch_files = []
         self.batch_index = 0
+        self.analysis_history = {} # v1.2.0: Stores {path: {'overlay': info, 'snapshots': [...]}}
+        self.global_mag_popups = [] # Track Toplevel windows for absolute cleanup
+        self.hide_result_overlay = False # Temporary flag for hover
+        self.hide_result_permanently = False # v1.2.9+: Persistent hide after first hover
         
         self.load_config()
         self.setup_ui()
@@ -143,13 +147,16 @@ class SplicingGUI:
         self.right_panel = ttk.Frame(self.paned)
         self.paned.add(self.right_panel, weight=4)
         
-        # Use a standard ttk.Notebook
-        self.notebook = ttk.Notebook(self.right_panel, bootstyle=PRIMARY)
+        # Use a standard ttk.Notebook (v1.2.7: Secondary style)
+        self.notebook = ttk.Notebook(self.right_panel, bootstyle=SECONDARY)
         self.notebook.pack(fill=BOTH, expand=YES, padx=5, pady=5)
 
         # Restore Sash Position (v1.2.0)
         sash_pos = self.gui_config.get("sash_pos", 350)
         self.root.after(200, lambda: self.paned.sashpos(0, sash_pos))
+
+        # Tab Change Binding (v1.2.1)
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_change)
         
         # --- TAB 1: Image View ---
         self.img_tab = ttk.Frame(self.notebook)
@@ -161,6 +168,21 @@ class SplicingGUI:
         
         self.canvas = tk.Canvas(self.canvas_frame, bg="#1a1a1a", highlightthickness=0)
         self.canvas.pack(fill=BOTH, expand=YES)
+
+        # Image Navigation Bar (v1.2.0)
+        self.nav_frame = ttk.Frame(self.img_tab, padding=(10, 2))
+        self.nav_frame.pack(fill=X, side=TOP)
+        
+        self.nav_label = ttk.Label(self.nav_frame, text="0 / 0", font=("Helvetica", 10, "bold"))
+        self.nav_label.pack(side=LEFT, padx=10)
+        
+        # Bookmark Area (Small status dots)
+        self.bookmark_outer = ttk.Frame(self.nav_frame)
+        self.bookmark_outer.pack(side=RIGHT, fill=Y)
+        
+        self.bookmark_canvas = tk.Canvas(self.bookmark_outer, height=30, width=400, bg="#1a1a1a", highlightthickness=0)
+        self.bookmark_canvas.pack(side=RIGHT, padx=10)
+        self.bookmark_widgets = []
         
         # Bottom: Preview Area for Targets
         self.preview_outer = ttk.Frame(self.img_tab, height=150) # Increased height
@@ -528,7 +550,8 @@ class SplicingGUI:
         
         # Update Global Styles
         self.style.configure(".", font=("Helvetica", size))
-        self.style.configure("TNotebook.Tab", font=("Helvetica", size))
+        # v1.2.6: Add generous padding to tabs to prevent them from sticking together
+        self.style.configure("TNotebook.Tab", font=("Helvetica", size, "bold"), padding=[30, 10])
         self.style.configure("TLabelframe.Label", font=("Helvetica", size, "bold"))
         
         # Update labels & Checkbuttons
@@ -642,9 +665,12 @@ class SplicingGUI:
             if self.auto_clear_log_var.get():
                 self.clear_log()
             self.current_image_path = path
-            self.batch_files = []
+            self.batch_files = [path]
+            self.batch_index = 0
+            self.analysis_history = {}
+            self.update_nav_ui()
             self.display_image(path)
-            self.notebook.select(0) # Auto-switch to Image View tab
+            self.notebook.select(0) 
             self.log(f"已載入: {os.path.basename(path)}")
             if self.auto_analyze_var.get():
                 self.start_analysis()
@@ -660,11 +686,14 @@ class SplicingGUI:
             self.batch_files = [os.path.join(folder, f) for f in os.listdir(folder) 
                                 if f.lower().endswith(('.jpg', '.png', '.bmp'))]
             if self.batch_files:
-                self.batch_index = 0
-                self.current_image_path = self.batch_files[0]
+                self.analysis_history = {}
+                self.update_nav_ui()
                 self.display_image(self.current_image_path)
-                self.notebook.select(0) # Auto-switch to Image View tab
-                self.log(f"已載入資料夾: {folder} ({len(self.batch_files)} 張照片)")
+                self.notebook.select(0)
+                msg = f"已載入資料夾: {folder} (共 {len(self.batch_files)} 張照片)"
+                self.log(msg)
+                tk.messagebox.showinfo("載入成功", msg)
+                
                 if self.auto_analyze_var.get():
                     self.start_analysis()
                 else:
@@ -673,6 +702,17 @@ class SplicingGUI:
                 self.log("資料夾內未發現支援的照片格式。")
 
     def display_image(self, path, overlay_info=None):
+        # Recall history only if this is a fresh file load.
+        # CRITICAL: If hide_result_permanently is True, we are in a REDRAW for hover,
+        # so we MUST NOT reload history (which calls add_preview_thumbnail and causes duplicates).
+        if overlay_info is None and not self.hide_result_permanently and path in self.analysis_history:
+            hist = self.analysis_history[path]
+            overlay_info = hist.get('overlay')
+            # Restore snapshots for this image
+            self.clear_previews()
+            for snap in hist.get('snapshots', []):
+                self.add_preview_thumbnail(snap['img'], snap['index'], snap['status'], snap['shift'], snap['rect'])
+
         try:
             # Use cached image if possible to speed up animation
             if hasattr(self, '_cached_path') and self._cached_path == path:
@@ -765,7 +805,7 @@ class SplicingGUI:
 
                 # 3. Draw Watermark Final Result (Top Layer)
                 final_res = overlay_info.get('final_result')
-                if final_res:
+                if final_res and not self.hide_result_permanently:
                     # Draw semi-transparent black overlay
                     overlay_layer = Image.new('RGBA', (new_w, new_h), (0, 0, 0, 200))
                     img_resized.paste(overlay_layer, (0, 0), overlay_layer)
@@ -787,14 +827,36 @@ class SplicingGUI:
                     except:
                         font = None
                     
-                    # Center text
+                    # Center text (v1.2.1: Filename + Result)
                     try:
-                        tw, th = draw.textsize(res_text, font=font) if hasattr(draw, 'textsize') else (400, 200)
-                    except:
-                        # Fallback for newer Pillow
-                        bbox = draw.textbbox((0, 0), res_text, font=font)
-                        tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
-                    draw.text(((new_w - tw)//2, (new_h - th)//2), res_text, fill=res_color, font=font)
+                        fname = os.path.basename(path)
+                        # Load smaller font for filename
+                        small_font = None
+                        for fp in font_paths:
+                            if os.path.exists(fp):
+                                small_font = ImageFont.truetype(fp, 60)
+                                break
+                        if not small_font: small_font = ImageFont.load_default()
+                        
+                        # Get dimensions
+                        f_bbox = draw.textbbox((0, 0), fname, font=small_font)
+                        wf, hf = f_bbox[2] - f_bbox[0], f_bbox[3] - f_bbox[1]
+                        
+                        t_bbox = draw.textbbox((0, 0), res_text, font=font)
+                        wt, ht = t_bbox[2] - t_bbox[0], t_bbox[3] - t_bbox[1]
+                        
+                        # Calculate vertical stack
+                        spacing = 30
+                        total_h = hf + wt + spacing
+                        start_y = (new_h - total_h) // 2
+                        
+                        # Draw Filename (White)
+                        draw.text(((new_w - wf) // 2, start_y), fname, fill="white", font=small_font)
+                        # Draw Result (Green/Red)
+                        draw.text(((new_w - wt) // 2, start_y + hf + spacing), res_text, fill=res_color, font=font)
+                    except Exception as e:
+                        print(f"Overlay drawing error: {e}")
+                        draw.text((new_w//2 - 100, new_h//2), res_text, fill=res_color)
                 
 
             self.tk_img = ImageTk.PhotoImage(img_resized)
@@ -901,6 +963,7 @@ class SplicingGUI:
         
         if self.is_analyzing: return
         
+        self.hide_result_permanently = False # Reset on new analysis
         self.is_analyzing = True
         self.notebook.select(0) # Auto-switch to Image View tab
         self.analyze_btn.config(state=DISABLED)
@@ -932,6 +995,7 @@ class SplicingGUI:
 
     def process_single_image(self, path):
         try:
+            self.root.after(0, self.clear_previews) # v1.2.4: Clear previous snapshots when moving to next file
             self.root.after(0, lambda p=path: self.display_image(p))
             # Critical: Allow UI to draw the basic image first
             time.sleep(0.1) 
@@ -1014,6 +1078,13 @@ class SplicingGUI:
                 # Add to Bottom Preview Area (v1.1.8: Horizontal + Arrow)
                 self.add_preview_thumbnail(debug_roi, step['index'], status_tag, shift, step['rect'])
                 
+                # Store snapshot in history for navigation recall
+                if path not in self.analysis_history:
+                    self.analysis_history[path] = {'snapshots': [], 'overlay': None}
+                self.analysis_history[path]['snapshots'].append({
+                    'img': debug_roi.copy(), 'index': step['index'], 'status': status_tag, 'shift': shift, 'rect': step['rect']
+                })
+                
                 time.sleep(1.0) 
             
             # --- FINAL SPEC ISSUE LOGGING ---
@@ -1074,6 +1145,11 @@ class SplicingGUI:
 
             # Final Giant Result Overlay
             final_overlay = {'final_result': 'pass' if image_pass else 'fail'}
+            if path in self.analysis_history:
+                self.analysis_history[path]['overlay'] = final_overlay.copy()
+                self.analysis_history[path]['is_pass'] = image_pass
+            
+            self.root.after(0, self.update_nav_ui)
             self.root.after(0, self.safe_update_ui, path, final_overlay)
             time.sleep(1.2) 
         except Exception as e:
@@ -1086,6 +1162,76 @@ class SplicingGUI:
             self.preview_widgets = []
             self.preview_canvas.xview_moveto(0.0)
         self.root.after(0, _clear)
+
+    def update_nav_ui(self):
+        """Update the navigation label and PASS/FAIL bookmarks."""
+        total = len(self.batch_files)
+        curr = self.batch_index + 1 if total > 0 else 0
+        self.nav_label.config(text=f"{curr} / {total}")
+        
+        # Clear and redraw bookmarks
+        self.bookmark_canvas.delete("all")
+        dot_w = 20
+        gap = 5
+        for i, path in enumerate(self.batch_files):
+            color = "#444444" # Unprocessed
+            if path in self.analysis_history:
+                color = "#00FF00" if self.analysis_history[path].get('is_pass') else "#FF0000"
+            
+            x = i * (dot_w + gap)
+            # Highlight current
+            outline = "white" if i == self.batch_index else ""
+            width = 2 if i == self.batch_index else 0
+            
+            rect_id = self.bookmark_canvas.create_rectangle(x, 5, x + dot_w, 25, 
+                                                           fill=color, outline=outline, width=width)
+            # Simple jump on click
+            self.bookmark_canvas.tag_bind(rect_id, "<Button-1>", lambda e, idx=i: self.jump_to_image(idx))
+        
+        self.bookmark_canvas.config(scrollregion=self.bookmark_canvas.bbox("all"))
+
+    def prev_image(self):
+        if self.is_analyzing or not self.batch_files: return
+        self.hide_result_permanently = False # Reset for new image
+        self.batch_index = (self.batch_index - 1) % len(self.batch_files)
+        self.current_image_path = self.batch_files[self.batch_index]
+        self.display_image(self.current_image_path)
+        self.update_nav_ui()
+
+    def next_image(self):
+        if self.is_analyzing or not self.batch_files: return
+        self.hide_result_permanently = False # Reset for new image
+        self.batch_index = (self.batch_index + 1) % len(self.batch_files)
+        self.current_image_path = self.batch_files[self.batch_index]
+        self.display_image(self.current_image_path)
+        self.update_nav_ui()
+
+    def jump_to_image(self, index):
+        if self.is_analyzing: return
+        self.hide_result_permanently = False # Reset for new image
+        self.batch_index = index
+        self.current_image_path = self.batch_files[self.batch_index]
+        self.display_image(self.current_image_path)
+        self.update_nav_ui()
+
+    def on_tab_change(self, event):
+        """Clear overlays and popups when leaving Image View tab."""
+        # index 0 is Image View
+        if self.notebook.index("current") != 0:
+            self.hide_target_arrow()
+            self.hide_magnifier()
+            self.hide_result_overlay = False
+            self.clear_all_popups()
+            self.redraw_current()
+
+    def clear_all_popups(self):
+        """Forcefully destroy all tracking toplevel windows (v1.2.3)"""
+        for win in list(self.global_mag_popups):
+            try:
+                if win.winfo_exists():
+                    win.destroy()
+            except: pass
+        self.global_mag_popups.clear()
 
     def add_preview_thumbnail(self, cv_img, index, status, shift, rect):
         def _add():
@@ -1110,6 +1256,7 @@ class SplicingGUI:
                 # Container
                 item_frame = ttk.Frame(self.preview_frame, padding=5, bootstyle="secondary")
                 item_frame.pack(side=LEFT, padx=10)
+                item_frame.tk_large = tk_large # v1.2.4: Keep strong reference to prevent garbage collection
                 
                 # Image on Left
                 border_color = "#00FF00" if status == 'pass' else "#FF0000"
@@ -1125,49 +1272,62 @@ class SplicingGUI:
                 lbl_index = ttk.Label(info_frame, text=f"目標 T{index}", font=("Helvetica", 10, "bold"))
                 lbl_index.pack(anchor=W)
                 
-                lbl_shift = ttk.Label(info_frame, text=f"位移: {shift}px", font=("Helvetica", 9))
-                lbl_shift.pack(anchor=W)
+                lbl_shift_x = ttk.Label(info_frame, text=f"位移: {shift}px", font=("Helvetica", 9))
+                lbl_shift_x.pack(anchor=W)
                 
-                lbl_status = ttk.Label(info_frame, text=f"結果: {status_zh}", 
-                                      foreground=border_color, font=("Helvetica", 9, "bold"))
-                lbl_status.pack(anchor=W)
+                # Keep references to prevent GC
+                item_frame.tk_large = tk_large
 
-                # Hover Arrow & Magnifier Logic
-                mag_win = None
-
+                # Hover Arrow & Magnifier Logic (Singleton v1.2.7 Fix)
                 def show_hover(event):
-                    nonlocal mag_win
-                    # 1. Show Arrow on main canvas
+                    # 1. Kill any existing popups first
+                    self.clear_all_popups()
+                    
+                    # 2. Set PERMANENT hide flag and Redraw
+                    self.hide_result_permanently = True
+                    self.redraw_current()
+                    
+                    # 3. Draw Arrow
                     self.show_target_arrow(rect)
                     
-                    # 2. Show Popup Magnifier
-                    if not mag_win:
-                        mag_win = tk.Toplevel(self.root)
-                        mag_win.overrideredirect(True)
-                        mag_win.attributes("-topmost", True)
-                        l = tk.Label(mag_win, image=tk_large, bg="white", bd=2)
-                        l.image = tk_large
-                        l.pack()
-                        move_mag(event)
+                    # 4. Create NEW single popup magnifier
+                    mag = tk.Toplevel(self.root)
+                    mag.overrideredirect(True)
+                    mag.attributes("-topmost", True)
+                    self.global_mag_popups.append(mag)
+                    
+                    l = tk.Label(mag, image=tk_large, bg="white", bd=2)
+                    l.image = tk_large
+                    l.pack()
+                    
+                    x_p, y_p = event.x_root + 20, event.y_root - 180
+                    mag.geometry(f"+{x_p}+{y_p}")
 
                 def hide_hover(event):
-                    nonlocal mag_win
                     self.hide_target_arrow()
-                    if mag_win:
-                        mag_win.destroy()
-                        mag_win = None
+                    # Do NOT reset hide_result_permanently here
+                    # Do NOT redraw_current here (keep it hidden)
+                    self.clear_all_popups()
 
                 def move_mag(event):
-                    nonlocal mag_win
-                    if mag_win:
-                        x = event.x_root + 20
-                        y = event.y_root - 180
-                        mag_win.geometry(f"+{x}+{y}")
+                    for mag in self.global_mag_popups:
+                        try:
+                            if mag.winfo_exists():
+                                x_p, y_p = event.x_root + 20, event.y_root - 180
+                                mag.geometry(f"+{x_p}+{y_p}")
+                        except: pass
 
-                lbl_img.bind("<Enter>", show_hover)
-                lbl_img.bind("<Leave>", hide_hover)
-                lbl_img.bind("<Motion>", move_mag)
+                # Bind to all elements in the thumbnail for reliability (v1.2.9)
+                for w in [item_frame, lbl_img, info_frame, lbl_index, lbl_shift_x]:
+                    w.bind("<Enter>", show_hover)
+                    w.bind("<Leave>", hide_hover)
+                    w.bind("<Motion>", move_mag)
                 
+                # Double insurance on references
+                item_frame.img_ref_l = tk_large
+                item_frame.img_ref_t = tk_thumb
+                lbl_img.img_ref = tk_thumb
+
                 self.preview_widgets.append(item_frame)
                 self.preview_canvas.update_idletasks()
                 self.preview_canvas.configure(scrollregion=self.preview_canvas.bbox("all"))
