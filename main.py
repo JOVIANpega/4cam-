@@ -50,6 +50,15 @@ class SplicingGUI:
                        background=[("selected", "#007bff"), ("active", "#4e5d6c")], 
                        foreground=[("selected", "#ffffff"), ("active", "#ffffff")])
         
+        # v1.2.6: Premium Button Handover (Hover) Effects
+        # We increase the brightness/contrast on hover for all major button types
+        self.style.map("primary.TButton", background=[("active", "#0056b3"), ("pressed", "#004085")])
+        self.style.map("secondary.TButton", background=[("active", "#5a6268"), ("pressed", "#4e555b")])
+        self.style.map("success.TButton", background=[("active", "#218838"), ("pressed", "#1e7e34")])
+        self.style.map("warning.TButton", background=[("active", "#e0a800"), ("pressed", "#d39e00")])
+        self.style.map("danger.TButton", background=[("active", "#c82333"), ("pressed", "#bd2130")])
+        self.style.map("info.TButton", background=[("active", "#138496"), ("pressed", "#117a8b")])
+        
         self.processor = SplicingProcessor()
         
         # Robust path handling for EXE
@@ -185,50 +194,61 @@ class SplicingGUI:
         self.img_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.img_tab, text=" [ 圖片顯示 (Image View) ] ")
         
-        # Top: Canvas for main image
-        self.canvas_frame = ttk.Frame(self.img_tab)
-        self.canvas_frame.pack(fill=BOTH, expand=YES)
-        
-        self.canvas = tk.Canvas(self.canvas_frame, bg="#1a1a1a", highlightthickness=0)
-        self.canvas.pack(fill=BOTH, expand=YES)
-
-        # Image Navigation Bar (v1.2.0)
+        # 1. Navigation at TOP
         self.nav_frame = ttk.Frame(self.img_tab, padding=(10, 2))
         self.nav_frame.pack(fill=X, side=TOP)
         
         self.nav_label = ttk.Label(self.nav_frame, text="0 / 0", font=("Helvetica", 10, "bold"))
         self.nav_label.pack(side=LEFT, padx=10)
         
-        # Bookmark Area (Small status dots)
-        self.bookmark_outer = ttk.Frame(self.nav_frame)
-        self.bookmark_outer.pack(side=RIGHT, fill=Y)
-        
-        self.bookmark_canvas = tk.Canvas(self.bookmark_outer, height=45, width=400, bg="#1a1a1a", highlightthickness=0)
-        self.bookmark_canvas.pack(side=RIGHT, padx=10)
-        self.bookmark_widgets = []
-        
-        # Bottom: Preview Area for Targets
-        self.preview_outer = ttk.Frame(self.img_tab, height=150) # Increased height
+        # 2. Console Area at BOTTOM (Expanded v1.5.0)
+        self.preview_outer = ttk.Frame(self.img_tab, height=330) 
         self.preview_outer.pack(fill=X, side=BOTTOM, padx=5, pady=5)
         self.preview_outer.pack_propagate(False)
         
-        lbl_preview = ttk.Label(self.preview_outer, text="🔍 目標區塊快照 (Target Snapshots):", font=("Helvetica", 9, "bold"))
-        lbl_preview.pack(anchor=W, padx=5)
+        # --- Section A: Target Snapshots (Now at the TOP of the console) ---
+        lbl_preview = ttk.Label(self.preview_outer, text="🔍 目前目標區塊快照 (Target Snapshots):", font=("Helvetica", 9, "bold"))
+        lbl_preview.pack(anchor=W, padx=5, pady=(5, 2))
         
-        # Horizontal Scrollbar for previews
         preview_scroll = ttk.Scrollbar(self.preview_outer, orient=HORIZONTAL)
-        preview_scroll.pack(side=BOTTOM, fill=X)
+        preview_scroll.pack(side=TOP, fill=X) # Scrollbar for snapshots
         
         self.preview_canvas = tk.Canvas(self.preview_outer, height=100, bg="#2d2d2d", 
                                        highlightthickness=0, xscrollcommand=preview_scroll.set)
-        self.preview_canvas.pack(fill=BOTH, expand=YES)
+        self.preview_canvas.pack(side=TOP, fill=X, pady=2)
         preview_scroll.config(command=self.preview_canvas.xview)
         
         self.preview_frame = ttk.Frame(self.preview_canvas)
         self.preview_canvas.create_window((0, 0), window=self.preview_frame, anchor=NW)
         self.preview_frame.bind("<Configure>", lambda e: self.preview_canvas.configure(scrollregion=self.preview_canvas.bbox("all")))
+        self.preview_widgets = []
         
-        self.preview_widgets = [] # To keep track of thumbnails
+        ttk.Separator(self.preview_outer, orient=HORIZONTAL).pack(fill=X, pady=10)
+
+        # --- Section B: Image Navigation Grid (8 Columns x Multiple Rows) ---
+        grid_header = ttk.Frame(self.preview_outer)
+        grid_header.pack(fill=X)
+        ttk.Label(grid_header, text="📑 批次進度控制 (Batch Navigation Grid):", font=("Helvetica", 9, "bold")).pack(side=LEFT, padx=5)
+        
+        self.bookmark_outer = ttk.Frame(self.preview_outer)
+        self.bookmark_outer.pack(fill=BOTH, expand=YES, padx=10, pady=5)
+        
+        # Grid Scrollbar (Vertical if many rows)
+        bookmark_scroll = ttk.Scrollbar(self.bookmark_outer, orient=VERTICAL)
+        bookmark_scroll.pack(side=RIGHT, fill=Y)
+        
+        self.bookmark_canvas = tk.Canvas(self.bookmark_outer, height=140, bg="#1a1a1a", highlightthickness=0,
+                                         yscrollcommand=bookmark_scroll.set)
+        self.bookmark_canvas.pack(side=LEFT, fill=BOTH, expand=YES)
+        bookmark_scroll.config(command=self.bookmark_canvas.yview)
+        self.bookmark_widgets = []
+
+        # 3. Canvas in the MIDDLE
+        self.canvas_frame = ttk.Frame(self.img_tab)
+        self.canvas_frame.pack(fill=BOTH, expand=YES)
+        
+        self.canvas = tk.Canvas(self.canvas_frame, bg="#1a1a1a", highlightthickness=0)
+        self.canvas.pack(fill=BOTH, expand=YES)
         
         # --- TAB 2: Settings ---
         self.settings_tab = ttk.Frame(self.notebook)
@@ -427,6 +447,20 @@ class SplicingGUI:
         self.fail_label.grid(row=3, column=2, sticky=W, pady=10, padx=(20, 0))
         self.font_widgets_labels.append(self.fail_label)
 
+        # v1.2.6: Archive Filter Keyword Setting
+        ttk.Separator(param_frame, orient=HORIZONTAL).pack(fill=X, pady=15)
+        
+        filter_frame = ttk.Frame(param_frame)
+        filter_frame.pack(fill=X, pady=5)
+        
+        lbl_filter = ttk.Label(filter_frame, text="🔍 影像名稱關鍵字 (Filename Keyword):", font=("Helvetica", 12, "bold"))
+        lbl_filter.pack(side=LEFT, padx=(0, 10))
+        self.font_widgets_labels.append(lbl_filter)
+        
+        self.keyword_entry = ttk.Entry(filter_frame, textvariable=self.zip_filter_var, width=15)
+        self.keyword_entry.pack(side=LEFT)
+        ToolTip(self.keyword_entry, text="載入 資料夾 或 壓縮檔 時，僅會提取檔名包含此關鍵字的檔案。\n例如: 4cam_cam (留空則不篩選)")
+
         # Reset Button (Moved inside Algorithm Control frame)
         btn_reset = ttk.Button(param_frame, text="🔄 恢復預設參數", bootstyle=WARNING, 
                                command=self.reset_defaults)
@@ -530,36 +564,43 @@ class SplicingGUI:
             self.save_config()
 
     def log(self, message):
+        # v1.3.0: Per-Image Log Isolation logic
+        tag = None
+        is_fail = False
+        
+        # Determine Tag and Pass/Fail status
+        if "FAIL" in message or "[NG]" in message:
+            is_fail = True
+        
+        if "PixelsShift" in message and "=" in message:
+            try:
+                val_str = message.split("=")[-1].strip()
+                val = float(val_str)
+                if val >= self.fail_thd_var.get():
+                    is_fail = True
+            except: pass
+            
+        if "=================" in message or "參數值:" in message:
+            tag = "blue_text"
+        elif "PASS" in message or "[OK]" in message:
+            tag = "pass_text"
+        elif is_fail:
+            tag = "fail_text"
+            
+        # 1. Store in History if currently analyzing a specific file
+        # We check both is_analyzing and current_image_path
+        if self.is_analyzing and self.current_image_path in self.analysis_history:
+            if 'log_entries' not in self.analysis_history[self.current_image_path]:
+                self.analysis_history[self.current_image_path]['log_entries'] = []
+            self.analysis_history[self.current_image_path]['log_entries'].append((message, tag))
+
+        # 2. Update UI Real-time
         def _log():
-            # Get current end position before insertion
             start_pos = self.log_area.index("end-1c")
             self.log_area.insert(END, message + "\n")
-            
-            is_fail = False
-            # 1. Check for explicit FAIL keywords
-            if "FAIL" in message or "[NG]" in message:
-                is_fail = True
-            
-            # 2. Smart numeric check for spec_issue lines (e.g., PixelsShift_0=15.0)
-            if "PixelsShift" in message and "=" in message:
-                try:
-                    # Extract the value after '='
-                    val_str = message.split("=")[-1].strip()
-                    val = float(val_str)
-                    # Compare with current Fail Threshold from the slider
-                    if val >= self.fail_thd_var.get():
-                        is_fail = True
-                except (ValueError, IndexError):
-                    pass
-            
-            # Apply color tags
-            if "=================" in message or "參數值:" in message:
-                self.log_area.tag_add("blue_text", start_pos, "end-1c")
-            elif "PASS" in message or "[OK]" in message:
-                self.log_area.tag_add("pass_text", start_pos, "end-1c")
-            elif is_fail:
-                self.log_area.tag_add("fail_text", start_pos, "end-1c")
-                
+            if tag:
+                self.log_area.tag_add(tag, start_pos, "end-1c")
+            # v1.4.0: Always keep scrolling to the end for the persistent session log
             self.log_area.see(END)
         self.root.after(0, _log)
 
@@ -567,8 +608,9 @@ class SplicingGUI:
         self.diff_thd_var.set(self.DEFAULT_DIFF)
         self.rate_thd_var.set(self.DEFAULT_RATE)
         self.fail_thd_var.set(self.DEFAULT_FAIL)
+        self.zip_filter_var.set("4cam_cam")
         self.gui_font_size_var.set(12)
-        self.log("參數已恢復為預設值。")
+        self.log("參數與關鍵字已恢復為預設值。")
 
     def apply_ui_font(self):
         size = self.gui_font_size_var.get()
@@ -704,44 +746,13 @@ class SplicingGUI:
                 self.clear_previews()
 
     def load_zip(self):
-        """Load images from ZIP/7z with keyword filtering (v1.2.1-archive)"""
+        """Load images from ZIP/7z using the keyword from Settings (v1.2.6)"""
         archive_paths = filedialog.askopenfilenames(filetypes=[("壓縮檔案", "*.zip *.7z"), ("所有檔案", "*.*")])
         if not archive_paths: return
-
-        # Create Keyword Input Popup
-        popup = tk.Toplevel(self.root)
-        popup.title("篩選關鍵字")
-        popup.geometry("350x180")
-        popup.resizable(False, False)
-        popup.attributes("-topmost", True)
         
-        # Center popup
-        pw = self.root.winfo_screenwidth()
-        ph = self.root.winfo_screenheight()
-        popup.geometry(f"350x180+{pw//2-175}+{ph//2-90}")
-
-        ttk.Label(popup, text="輸入檔名過濾關鍵字:", font=("Helvetica", 10)).pack(pady=15)
-        entry = ttk.Entry(popup, textvariable=self.zip_filter_var, width=30)
-        entry.pack(pady=5)
-        entry.select_range(0, tk.END)
-        entry.focus_set()
-
-        def confirm(event=None):
-            keyword = self.zip_filter_var.get().strip()
-            popup.destroy()
-            self._process_archive_files(archive_paths, keyword)
-
-        btn_frame = ttk.Frame(popup)
-        btn_frame.pack(pady=15)
-
-        btn_ok = ttk.Button(btn_frame, text="確定 (Confirm)", bootstyle=SUCCESS, command=confirm)
-        btn_ok.pack(side=LEFT, padx=10)
-
-        btn_cancel = ttk.Button(btn_frame, text="取消 (Cancel)", bootstyle=SECONDARY, command=popup.destroy)
-        btn_cancel.pack(side=LEFT, padx=10)
-        
-        popup.bind("<Return>", confirm)
-        popup.bind("<Escape>", lambda e: popup.destroy())
+        keyword = self.zip_filter_var.get().strip()
+        self.log(f"開始載入壓縮檔，使用設定值過濾: '{keyword}'")
+        self._process_archive_files(archive_paths, keyword)
 
     def _get_unique_temp_path(self, fname):
         """Generate a unique path in temp directory (v1.2.1)"""
@@ -837,10 +848,10 @@ class SplicingGUI:
             msg = f"載入成功！共從壓縮檔中提取 {len(extracted_files)} 張符合關鍵字 '{keyword}' 的圖片。\n\n是否立即開始分析？"
             self.log(msg)
             
-            # Use askokcancel to allow user to stop here if count is wrong (v1.2.1)
+            # Use askokcancel to allow user to stop here if count is wrong (v1.3.2: Direct start 'all')
             if tk.messagebox.askokcancel("載入完成", msg):
                 self.notebook.select(0) # Switch to Image View
-                self.start_analysis()
+                self.start_analysis(mode="all")
             else:
                 self.log("使用者取消自動分析。")
         else:
@@ -852,8 +863,15 @@ class SplicingGUI:
             self.last_dir = folder
             if self.auto_clear_log_var.get():
                 self.clear_log()
-            self.batch_files = [os.path.join(folder, f) for f in os.listdir(folder) 
-                                if f.lower().endswith(('.jpg', '.png', '.bmp'))]
+            
+            keyword = self.zip_filter_var.get().strip().lower()
+            all_imgs = [f for f in os.listdir(folder) if f.lower().endswith(('.jpg', '.png', '.bmp'))]
+            
+            if keyword:
+                self.batch_files = [os.path.join(folder, f) for f in all_imgs if keyword in f.lower()]
+            else:
+                self.batch_files = [os.path.join(folder, f) for f in all_imgs]
+
             if self.batch_files:
                 self.analysis_history = {}
                 self.batch_index = 0
@@ -861,21 +879,28 @@ class SplicingGUI:
                 self.update_nav_ui()
                 self.display_image(self.current_image_path)
                 self.notebook.select(0)
-                msg = f"已載入資料夾: {folder} (共 {len(self.batch_files)} 張照片)"
+                
+                filter_msg = f" (關鍵字篩選: '{keyword}')" if keyword else ""
+                msg = f"已載入資料夾: {folder}\n共發現 {len(all_imgs)} 張照片，已載入 {len(self.batch_files)} 張{filter_msg}"
                 self.log(msg)
                 tk.messagebox.showinfo("載入成功", msg)
                 
                 if self.auto_analyze_var.get():
-                    self.start_analysis()
+                    self.start_analysis(mode="all")
                 else:
                     self.clear_previews()
             else:
                 self.log("資料夾內未發現支援的照片格式。")
 
-    def display_image(self, path, overlay_info=None):
+    def display_image(self, path, overlay_info=None, refresh_log=False):
         if path is None:
             self.log("畫布顯示失敗: 路徑為空 (Path is None)")
             return
+            
+        # v1.4.0: SESSION LOG PERSISTENCE
+        # We NO LONGER clear the log_area here. 
+        # The main log stays as a full record of the session.
+        # Specific image details will be drawn as an OVERLAY on the image.
             
         # Recall history only if this is a fresh file load.
         # CRITICAL: If hide_result_permanently is True, we are in a REDRAW for hover,
@@ -898,6 +923,7 @@ class SplicingGUI:
                 self._cached_img = img_original
             
             # Use canvas dimensions
+            self.root.update_idletasks() # Ensure accurate layout for measurement
             canvas_w = self.canvas.winfo_width()
             canvas_h = self.canvas.winfo_height()
             
@@ -1029,6 +1055,51 @@ class SplicingGUI:
                         draw.text(((new_w - wf) // 2, start_y), fname, fill="white", font=small_font)
                         # Draw Result (Green/Red)
                         draw.text(((new_w - wt) // 2, start_y + hf + spacing), res_text, fill=res_color, font=font)
+                        
+                        # v1.4.2: COLOR-CODED DETAILED LOG OVERLAY (Matches main log colors)
+                        if path in self.analysis_history and 'log_entries' in self.analysis_history[path]:
+                            log_info = []
+                            for msg, tag in self.analysis_history[path]['log_entries']:
+                                if any(x in msg for x in ["=====", "正在分析", "參數值", "已載入", "----------"]):
+                                    continue
+                                log_info.append((msg, tag))
+                            
+                            if log_info:
+                                try:
+                                    d_font = ImageFont.truetype("msjhbd.ttc", 18) 
+                                except:
+                                    try: d_font = ImageFont.truetype("msgothic.ttc", 18)
+                                    except: d_font = ImageFont.load_default()
+                                
+                                # Positioning & Aesthetic details
+                                pad = 15
+                                tx, ty = 30, 30
+                                
+                                # First, calculate total size for background box
+                                total_w = 0
+                                total_h = 0
+                                for msg, tag in log_info:
+                                    box = draw.textbbox((0, 0), msg, font=d_font)
+                                    total_w = max(total_w, box[2] - box[0])
+                                    total_h += (box[3] - box[1]) + 5
+                                
+                                # Draw elegant background card
+                                draw.rectangle([tx-pad, ty-pad, tx+total_w+pad+20, ty+total_h+pad], 
+                                               fill=(0, 0, 0, 110)) 
+                                
+                                # Draw each line with its corresponding color
+                                current_y = ty
+                                for msg, tag in log_info:
+                                    # Color Mapping based on tags
+                                    l_color = "#e0e0e0" # Default
+                                    if tag == "pass_text": l_color = "#00FF00" # Green
+                                    elif tag == "fail_text": l_color = "#FF0000" # Red
+                                    elif tag == "blue_text": l_color = "#00BFFF" # Deep Sky Blue
+                                    
+                                    draw.text((tx, current_y), msg, fill=l_color, font=d_font)
+                                    box = draw.textbbox((0, 0), msg, font=d_font)
+                                    current_y += (box[3] - box[1]) + 5
+                                
                     except Exception as e:
                         print(f"Overlay drawing error: {e}")
                         draw.text((new_w//2 - 100, new_h//2), res_text, fill=res_color)
@@ -1036,8 +1107,8 @@ class SplicingGUI:
 
             self.tk_img = ImageTk.PhotoImage(img_resized)
             self.canvas.delete("all")
-            # Anchor to North (top) instead of CENTER to leave space below
-            self.canvas.create_image(canvas_w//2, 10, image=self.tk_img, anchor=N)
+            # Anchor to CENTER (v1.4.3: Fixed tiny image/centering issue)
+            self.canvas.create_image(canvas_w//2, canvas_h//2, image=self.tk_img, anchor=CENTER)
             
             # Store resized image for magnifier source
             self.current_resized_img = img_resized
@@ -1131,16 +1202,18 @@ class SplicingGUI:
             self.log(f"UI Update Error: {str(e)}")
 
 
-    def start_analysis(self):
+    def start_analysis(self, mode="single"):
+        """Start analysis. mode='all' for batch, mode='single' for current image only (v1.3.2)"""
         if not self.current_image_path:
             self.log("尚未載入照片。")
             return
         
         if self.is_analyzing: return
         
-        self.hide_result_permanently = False # Reset on new analysis
+        self.analysis_mode = mode
+        self.hide_result_permanently = False 
         self.is_analyzing = True
-        self.notebook.select(0) # Auto-switch to Image View tab
+        self.notebook.select(0) 
         self.analyze_btn.config(state=DISABLED)
         self.status_var.set("分析中...")
         
@@ -1155,13 +1228,15 @@ class SplicingGUI:
     def run_analysis_pipeline(self):
         try:
             self.stop_event.clear()
-            if self.batch_files:
+            if self.batch_files and self.analysis_mode == "all":
+                # Batch mode: Analyze from current index to the end
                 for i in range(self.batch_index, len(self.batch_files)):
                     if self.stop_event.is_set(): break
                     self.current_image_path = self.batch_files[i]
                     self.batch_index = i
                     self.process_single_image(self.current_image_path)
             else:
+                # Single mode: Only analyze the currently selected image
                 self.process_single_image(self.current_image_path)
         except Exception as e:
             self.log(f"執行分析時發生錯誤: {str(e)}")
@@ -1170,7 +1245,18 @@ class SplicingGUI:
 
     def process_single_image(self, path):
         try:
-            self.root.after(0, self.clear_previews) # v1.2.4: Clear previous snapshots when moving to next file
+            # v1.2.1: Always ensure history entry exists so navigation squares update
+            if path not in self.analysis_history:
+                self.analysis_history[path] = {'snapshots': [], 'overlay': None, 'log_entries': []}
+            else:
+                # v1.3.1: CRITICAL - Clear previous snapshots to prevent duplicates in preview area
+                self.analysis_history[path]['snapshots'] = []
+                # v1.3.0: Clear previous log entries for this path when re-analyzing
+                self.analysis_history[path]['log_entries'] = []
+                self.log_area.delete('1.0', END)
+            
+            # v1.3.1: We must NOT recall old thumbnails during analysis redraw
+            self.root.after(0, self.clear_previews) 
             self.root.after(0, lambda p=path: self.display_image(p))
             # Critical: Allow UI to draw the basic image first
             time.sleep(0.1) 
@@ -1185,10 +1271,6 @@ class SplicingGUI:
             
             self.log(f"正在分析: {os.path.basename(path)}...")
             
-            # v1.2.1: Always ensure history entry exists so navigation squares update
-            if path not in self.analysis_history:
-                self.analysis_history[path] = {'snapshots': [], 'overlay': None}
-
             result = self.processor.analyze_image_prepare(path)
             if not result:
                 self.log(f"  [NG] 在 {os.path.basename(path)} 中發生嚴重錯誤，無法載入影像。")
@@ -1348,38 +1430,48 @@ class SplicingGUI:
         self.root.after(0, _clear)
 
     def update_nav_ui(self):
-        """Update the navigation label and PASS/FAIL bookmarks."""
+        """Update the navigation label and PASS/FAIL bookmarks (Grid Layout v1.5.0)"""
         total = len(self.batch_files)
         curr = self.batch_index + 1 if total > 0 else 0
         self.nav_label.config(text=f"{curr} / {total}")
         
         # Clear and redraw bookmarks
         self.bookmark_canvas.delete("all")
-        dot_w = 30  # Larger dots (v1.2.1)
+        dot_w = 40  
+        dot_h = 40
         gap = 8
+        cols = 8 # Display 8 squares per row as requested
+        
         for i, path in enumerate(self.batch_files):
             color = "#444444" # Unprocessed
             if path in self.analysis_history:
                 color = "#00FF00" if self.analysis_history[path].get('is_pass') else "#FF0000"
             
-            x = i * (dot_w + gap)
+            # Grid coordinates (x, y)
+            row = i // cols
+            col = i % cols
+            
+            x = col * (dot_w + gap) + 5
+            y = row * (dot_h + gap) + 5
+            
             # Highlight current
             outline = "white" if i == self.batch_index else ""
             width = 3 if i == self.batch_index else 0
-            # Draw square (Enlarged)
+            # Draw square
             tag_name = f"btn_{i}"
-            self.bookmark_canvas.create_rectangle(x, 5, x + dot_w, 35, 
+            self.bookmark_canvas.create_rectangle(x, y, x + dot_w, y + dot_h, 
                                                                fill=color, outline=outline, width=width, tags=tag_name)
             
-            # Add number (Enlarged font)
-            self.bookmark_canvas.create_text(x + dot_w/2, 20, text=str(i+1), 
+            # Add number
+            self.bookmark_canvas.create_text(x + dot_w/2, y + dot_h/2, text=str(i+1), 
                                             fill="white", font=("Helvetica", 11, "bold"), tags=tag_name)
             
-            # Interaction Bindings (v1.2.2: Hover to Switch/Handover)
+            # Interaction Bindings
             self.bookmark_canvas.tag_bind(tag_name, "<Button-1>", lambda e, idx=i: self.jump_to_image(idx))
             self.bookmark_canvas.tag_bind(tag_name, "<Enter>", lambda e, idx=i: self.bookmark_hover_enter(idx))
             self.bookmark_canvas.tag_bind(tag_name, "<Leave>", lambda e: self.bookmark_canvas.config(cursor=""))
         
+        # Dynamic Scroll Region
         self.bookmark_canvas.config(scrollregion=self.bookmark_canvas.bbox("all"))
 
     def bookmark_hover_enter(self, index):
@@ -1394,7 +1486,7 @@ class SplicingGUI:
         self.hide_result_permanently = False # Reset for new image
         self.batch_index = (self.batch_index - 1) % len(self.batch_files)
         self.current_image_path = self.batch_files[self.batch_index]
-        self.display_image(self.current_image_path)
+        self.display_image(self.current_image_path, refresh_log=True)
         self.update_nav_ui()
 
     def next_image(self):
@@ -1402,7 +1494,7 @@ class SplicingGUI:
         self.hide_result_permanently = False # Reset for new image
         self.batch_index = (self.batch_index + 1) % len(self.batch_files)
         self.current_image_path = self.batch_files[self.batch_index]
-        self.display_image(self.current_image_path)
+        self.display_image(self.current_image_path, refresh_log=True)
         self.update_nav_ui()
 
     def jump_to_image(self, index):
@@ -1410,7 +1502,7 @@ class SplicingGUI:
         self.hide_result_permanently = False # Reset for new image
         self.batch_index = index
         self.current_image_path = self.batch_files[self.batch_index]
-        self.display_image(self.current_image_path)
+        self.display_image(self.current_image_path, refresh_log=True)
         self.update_nav_ui()
 
     def on_tab_change(self, event):
