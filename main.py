@@ -38,6 +38,18 @@ class SplicingGUI:
         # Style
         self.style = ttk.Style(theme="darkly")
         
+        # v1.2.1: Custom Tab Styling (Premium Hover / Selection Effect)
+        self.style.configure("Custom.TNotebook", background="#1a1a1a", borderwidth=0)
+        self.style.configure("Custom.TNotebook.Tab", 
+                             padding=[15, 8], 
+                             font=("Microsoft JhengHei", 10, "bold"),
+                             background="#323232",
+                             foreground="#aaaaaa",
+                             borderwidth=0)
+        self.style.map("Custom.TNotebook.Tab",
+                       background=[("selected", "#007bff"), ("active", "#4e5d6c")], 
+                       foreground=[("selected", "#ffffff"), ("active", "#ffffff")])
+        
         self.processor = SplicingProcessor()
         
         # Robust path handling for EXE
@@ -158,8 +170,8 @@ class SplicingGUI:
         self.right_panel = ttk.Frame(self.paned)
         self.paned.add(self.right_panel, weight=4)
         
-        # Use a standard ttk.Notebook (v1.2.7: Secondary style)
-        self.notebook = ttk.Notebook(self.right_panel, bootstyle=SECONDARY)
+        # Use a Custom Styled Notebook (v1.2.1: Premium UI)
+        self.notebook = ttk.Notebook(self.right_panel, style="Custom.TNotebook")
         self.notebook.pack(fill=BOTH, expand=YES, padx=5, pady=5)
 
         # Restore Sash Position (v1.2.0)
@@ -191,7 +203,7 @@ class SplicingGUI:
         self.bookmark_outer = ttk.Frame(self.nav_frame)
         self.bookmark_outer.pack(side=RIGHT, fill=Y)
         
-        self.bookmark_canvas = tk.Canvas(self.bookmark_outer, height=30, width=400, bg="#1a1a1a", highlightthickness=0)
+        self.bookmark_canvas = tk.Canvas(self.bookmark_outer, height=45, width=400, bg="#1a1a1a", highlightthickness=0)
         self.bookmark_canvas.pack(side=RIGHT, padx=10)
         self.bookmark_widgets = []
         
@@ -827,8 +839,8 @@ class SplicingGUI:
             
             # Use askokcancel to allow user to stop here if count is wrong (v1.2.1)
             if tk.messagebox.askokcancel("載入完成", msg):
-                if self.auto_analyze_var.get():
-                    self.start_analysis()
+                self.notebook.select(0) # Switch to Image View
+                self.start_analysis()
             else:
                 self.log("使用者取消自動分析。")
         else:
@@ -1328,8 +1340,8 @@ class SplicingGUI:
         
         # Clear and redraw bookmarks
         self.bookmark_canvas.delete("all")
-        dot_w = 20
-        gap = 5
+        dot_w = 30  # Larger dots (v1.2.1)
+        gap = 8
         for i, path in enumerate(self.batch_files):
             color = "#444444" # Unprocessed
             if path in self.analysis_history:
@@ -1338,12 +1350,20 @@ class SplicingGUI:
             x = i * (dot_w + gap)
             # Highlight current
             outline = "white" if i == self.batch_index else ""
-            width = 2 if i == self.batch_index else 0
+            width = 3 if i == self.batch_index else 0
+            # Draw square (Enlarged)
+            tag_name = f"btn_{i}"
+            self.bookmark_canvas.create_rectangle(x, 5, x + dot_w, 35, 
+                                                               fill=color, outline=outline, width=width, tags=tag_name)
             
-            rect_id = self.bookmark_canvas.create_rectangle(x, 5, x + dot_w, 25, 
-                                                           fill=color, outline=outline, width=width)
-            # Simple jump on click
-            self.bookmark_canvas.tag_bind(rect_id, "<Button-1>", lambda e, idx=i: self.jump_to_image(idx))
+            # Add number (Enlarged font)
+            self.bookmark_canvas.create_text(x + dot_w/2, 20, text=str(i+1), 
+                                            fill="white", font=("Helvetica", 11, "bold"), tags=tag_name)
+            
+            # Interaction Bindings (v1.2.1: Improved hit-testing and cursor)
+            self.bookmark_canvas.tag_bind(tag_name, "<Button-1>", lambda e, idx=i: self.jump_to_image(idx))
+            self.bookmark_canvas.tag_bind(tag_name, "<Enter>", lambda e: self.bookmark_canvas.config(cursor="hand2"))
+            self.bookmark_canvas.tag_bind(tag_name, "<Leave>", lambda e: self.bookmark_canvas.config(cursor=""))
         
         self.bookmark_canvas.config(scrollregion=self.bookmark_canvas.bbox("all"))
 
