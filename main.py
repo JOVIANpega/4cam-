@@ -13,6 +13,10 @@ import threading
 import json
 from splicing_logic import SplicingProcessor
 import re
+import zipfile
+import py7zr
+import tempfile
+import shutil
 
 VERSION = "1.2.0"
 
@@ -70,6 +74,8 @@ class SplicingGUI:
         self.global_mag_popups = [] # Track Toplevel windows for absolute cleanup
         self.hide_result_overlay = False # Temporary flag for hover
         self.hide_result_permanently = False # v1.2.9+: Persistent hide after first hover
+        self.zip_filter_var = tk.StringVar(value="4cam_cam")
+        self.temp_extract_dir = None # For ZIP extraction
         
         self.load_config()
         self.setup_ui()
@@ -113,6 +119,11 @@ class SplicingGUI:
         btn_load_folder.pack(fill=X, pady=5)
         self.font_widgets_buttons.append(btn_load_folder)
         ToolTip(btn_load_folder, text="選擇一個資料夾進行批次分析")
+
+        btn_load_zip = ttk.Button(btn_container, text="📦 載入壓縮檔 (ZIP/7z)", bootstyle=WARNING, command=self.load_zip)
+        btn_load_zip.pack(fill=X, pady=5)
+        self.font_widgets_buttons.append(btn_load_zip)
+        ToolTip(btn_load_zip, text="選擇 ZIP 或 7z 檔案並篩選關鍵字進行分析")
         
         self.analyze_btn = ttk.Button(btn_container, text="🚀 開始分析", bootstyle=SUCCESS, command=self.start_analysis)
         self.analyze_btn.pack(fill=X, pady=15)
@@ -481,6 +492,9 @@ class SplicingGUI:
 
     def on_close(self):
         self.save_config()
+        if self.temp_extract_dir and os.path.exists(self.temp_extract_dir):
+            try: shutil.rmtree(self.temp_extract_dir)
+            except: pass
         self.root.destroy()
 
     def restore_sash(self):
@@ -676,6 +690,149 @@ class SplicingGUI:
                 self.start_analysis()
             else:
                 self.clear_previews()
+
+    def load_zip(self):
+        """Load images from ZIP/7z with keyword filtering (v1.2.1-archive)"""
+        archive_paths = filedialog.askopenfilenames(filetypes=[("壓縮檔案", "*.zip *.7z"), ("所有檔案", "*.*")])
+        if not archive_paths: return
+
+        # Create Keyword Input Popup
+        popup = tk.Toplevel(self.root)
+        popup.title("篩選關鍵字")
+        popup.geometry("350x180")
+        popup.resizable(False, False)
+        popup.attributes("-topmost", True)
+        
+        # Center popup
+        pw = self.root.winfo_screenwidth()
+        ph = self.root.winfo_screenheight()
+        popup.geometry(f"350x180+{pw//2-175}+{ph//2-90}")
+
+        ttk.Label(popup, text="輸入檔名過濾關鍵字:", font=("Helvetica", 10)).pack(pady=15)
+        entry = ttk.Entry(popup, textvariable=self.zip_filter_var, width=30)
+        entry.pack(pady=5)
+        entry.select_range(0, tk.END)
+        entry.focus_set()
+
+        def confirm(event=None):
+            keyword = self.zip_filter_var.get().strip()
+            popup.destroy()
+            self._process_archive_files(archive_paths, keyword)
+
+        btn_frame = ttk.Frame(popup)
+        btn_frame.pack(pady=15)
+
+        btn_ok = ttk.Button(btn_frame, text="確定 (Confirm)", bootstyle=SUCCESS, command=confirm)
+        btn_ok.pack(side=LEFT, padx=10)
+
+        btn_cancel = ttk.Button(btn_frame, text="取消 (Cancel)", bootstyle=SECONDARY, command=popup.destroy)
+        btn_cancel.pack(side=LEFT, padx=10)
+        
+        popup.bind("<Return>", confirm)
+        popup.bind("<Escape>", lambda e: popup.destroy())
+
+    def _get_unique_temp_path(self, fname):
+        """Generate a unique path in temp directory (v1.2.1)"""
+        if not self.temp_extract_dir:
+            self.temp_extract_dir = tempfile.mkdtemp(prefix="splicing_tool_")
+        target_path = os.path.join(self.temp_extract_dir, fname)
+        counter = 1
+        name_part, ext_part = os.path.splitext(fname)
+        while os.path.exists(target_path):
+            target_path = os.path.join(self.temp_extract_dir, f"{name_part}_{counter}{ext_part}")
+            counter += 1
+        return target_path
+
+    def _process_archive_files(self, archive_paths, keyword):
+        """Extract filtered files from ZIP or 7z to temp directory (Robust Flatten Logic)."""
+        if not self.temp_extract_dir:
+            self.temp_extract_dir = tempfile.mkdtemp(prefix="splicing_tool_")
+        
+        extracted_files = []
+        exts = ('.jpg', '.jpeg', '.png', '.bmp')
+        
+        for ap in archive_paths:
+            ext = os.path.splitext(ap)[1].lower()
+            a_name = os.path.basename(ap)
+            self.log(f"正在分析壓縮檔: {a_name} ...")
+            
+            archives_found = 0
+            archives_matched = 0
+            
+            try:
+                if ext == '.zip':
+                    with zipfile.ZipFile(ap, 'r') as z:
+                        for info in z.infolist():
+                            if info.is_dir(): continue
+                            archives_found += 1
+                            f_in_zip = info.filename
+                            fname = os.path.basename(f_in_zip)
+                            
+                            if any(fname.lower().endswith(e) for e in exts):
+                                if not keyword or keyword.lower() in fname.lower():
+                                    archives_matched += 1
+                                    target_path = self._get_unique_temp_path(fname)
+                                    with z.open(f_in_zip) as source, open(target_path, "wb") as target:
+                                        shutil.copyfileobj(source, target)
+                                    extracted_files.append(target_path)
+                                    
+                elif ext == '.7z':
+                    with py7zr.SevenZipFile(ap, mode='r') as z:
+                        # 1. Scan and find matches
+                        to_extract = []
+                        members = z.list()
+                        for m in members:
+                            if m.is_directory: continue
+                            archives_found += 1
+                            fname = os.path.basename(m.filename)
+                            if any(fname.lower().endswith(e) for e in exts):
+                                if not keyword or keyword.lower() in fname.lower():
+                                    archives_matched += 1
+                                    to_extract.append(m.filename)
+                        
+                        if to_extract:
+                            # 2. Extract matches in ONE GO to a sub-temporary folder
+                            sub_root = tempfile.mkdtemp(dir=self.temp_extract_dir)
+                            z.extract(targets=to_extract, path=sub_root)
+                            
+                            # 3. Walk and Flatten
+                            for root, dirs, files in os.walk(sub_root):
+                                for f in files:
+                                    if any(f.lower().endswith(e) for e in exts):
+                                        if not keyword or keyword.lower() in f.lower():
+                                            src_path = os.path.join(root, f)
+                                            dst_path = self._get_unique_temp_path(f)
+                                            shutil.move(src_path, dst_path)
+                                            extracted_files.append(dst_path)
+                            
+                            # 4. Clean up sub-root
+                            try: shutil.rmtree(sub_root)
+                            except: pass
+                
+                self.log(f"  -> {a_name}: 總計 {archives_found} 檔案, 符合篩選 {archives_matched} 個。")
+                                
+            except Exception as e:
+                self.log(f"讀取壓縮檔 {a_name} 失敗: {str(e)}")
+
+        if extracted_files:
+            self.analysis_history = {} # Reset for new batch
+            self.batch_files = extracted_files
+            self.batch_index = 0
+            self.current_image_path = self.batch_files[0]
+            self.display_image(self.current_image_path)
+            self.update_nav_ui()
+            
+            msg = f"載入成功！共從壓縮檔中提取 {len(extracted_files)} 張符合關鍵字 '{keyword}' 的圖片。\n\n是否立即開始分析？"
+            self.log(msg)
+            
+            # Use askokcancel to allow user to stop here if count is wrong (v1.2.1)
+            if tk.messagebox.askokcancel("載入完成", msg):
+                if self.auto_analyze_var.get():
+                    self.start_analysis()
+            else:
+                self.log("使用者取消自動分析。")
+        else:
+            self.log(f"找不到符合關鍵字 '{keyword}' 的影像檔案。")
 
     def load_folder(self):
         folder = filedialog.askdirectory(initialdir=self.last_dir)
