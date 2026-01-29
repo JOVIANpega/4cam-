@@ -18,7 +18,7 @@ import py7zr
 import tempfile
 import shutil
 
-VERSION = "1.2.0"
+VERSION = "1.2.5"
 
 class SplicingGUI:
     def __init__(self, root):
@@ -856,6 +856,8 @@ class SplicingGUI:
                                 if f.lower().endswith(('.jpg', '.png', '.bmp'))]
             if self.batch_files:
                 self.analysis_history = {}
+                self.batch_index = 0
+                self.current_image_path = self.batch_files[0]
                 self.update_nav_ui()
                 self.display_image(self.current_image_path)
                 self.notebook.select(0)
@@ -871,6 +873,10 @@ class SplicingGUI:
                 self.log("資料夾內未發現支援的照片格式。")
 
     def display_image(self, path, overlay_info=None):
+        if path is None:
+            self.log("畫布顯示失敗: 路徑為空 (Path is None)")
+            return
+            
         # Recall history only if this is a fresh file load.
         # CRITICAL: If hide_result_permanently is True, we are in a REDRAW for hover,
         # so we MUST NOT reload history (which calls add_preview_thumbnail and causes duplicates).
@@ -1179,12 +1185,23 @@ class SplicingGUI:
             
             self.log(f"正在分析: {os.path.basename(path)}...")
             
+            # v1.2.1: Always ensure history entry exists so navigation squares update
+            if path not in self.analysis_history:
+                self.analysis_history[path] = {'snapshots': [], 'overlay': None}
+
             result = self.processor.analyze_image_prepare(path)
             if not result:
                 self.log(f"  [NG] 在 {os.path.basename(path)} 中發生嚴重錯誤，無法載入影像。")
+                self.analysis_history[path]['is_pass'] = False
                 return
                 
             cv_img, steps = result
+            if not steps:
+                self.log(f"  [NG] 在 {os.path.basename(path)} 中未偵測到任何分析目標 (No targets found).")
+                self.analysis_history[path]['is_pass'] = False
+                self.root.after(0, self.safe_update_ui, path, {'final_result': 'fail'})
+                return
+
             image_pass = True
             fail_reasons = [] # Collector for diagnostic info
             
@@ -1248,8 +1265,6 @@ class SplicingGUI:
                 self.add_preview_thumbnail(debug_roi, step['index'], status_tag, shift, step['rect'])
                 
                 # Store snapshot in history for navigation recall
-                if path not in self.analysis_history:
-                    self.analysis_history[path] = {'snapshots': [], 'overlay': None}
                 self.analysis_history[path]['snapshots'].append({
                     'img': debug_roi.copy(), 'index': step['index'], 'status': status_tag, 'shift': shift, 'rect': step['rect']
                 })
@@ -1360,12 +1375,19 @@ class SplicingGUI:
             self.bookmark_canvas.create_text(x + dot_w/2, 20, text=str(i+1), 
                                             fill="white", font=("Helvetica", 11, "bold"), tags=tag_name)
             
-            # Interaction Bindings (v1.2.1: Improved hit-testing and cursor)
+            # Interaction Bindings (v1.2.2: Hover to Switch/Handover)
             self.bookmark_canvas.tag_bind(tag_name, "<Button-1>", lambda e, idx=i: self.jump_to_image(idx))
-            self.bookmark_canvas.tag_bind(tag_name, "<Enter>", lambda e: self.bookmark_canvas.config(cursor="hand2"))
+            self.bookmark_canvas.tag_bind(tag_name, "<Enter>", lambda e, idx=i: self.bookmark_hover_enter(idx))
             self.bookmark_canvas.tag_bind(tag_name, "<Leave>", lambda e: self.bookmark_canvas.config(cursor=""))
         
         self.bookmark_canvas.config(scrollregion=self.bookmark_canvas.bbox("all"))
+
+    def bookmark_hover_enter(self, index):
+        """Handle mouse hover over bookmark squares (v1.2.2)"""
+        self.bookmark_canvas.config(cursor="hand2")
+        # Only switch if not currently analyzing and the target is different from current
+        if not self.is_analyzing and index != self.batch_index:
+            self.jump_to_image(index)
 
     def prev_image(self):
         if self.is_analyzing or not self.batch_files: return
