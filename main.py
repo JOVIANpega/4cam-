@@ -169,11 +169,6 @@ class SplicingGUI:
         self.font_widgets_buttons.append(self.clear_log_btn)
         ToolTip(self.clear_log_btn, text="清除目前日誌")
         
-        # v1.8.0: Enable Stats Dashboard Button
-        self.stat_btn = ttk.Button(row2, text="📊 數據統計", bootstyle=INFO, command=lambda: self.notebook.select(3), cursor="hand2")
-        self.stat_btn.pack(side=LEFT, fill=X, expand=YES, padx=1, pady=2)
-        self.font_widgets_buttons.append(self.stat_btn)
-        ToolTip(self.stat_btn, text="查看批次分析數據總覽與良率統計")
         
         ttk.Separator(self.left_panel, orient=HORIZONTAL).pack(fill=X, pady=10)
         
@@ -1648,7 +1643,7 @@ class SplicingGUI:
             text_x = x + dot_w / 2
             text_y = y + dot_h + 12 # Directly below square
             self.bookmark_canvas.create_text(text_x, text_y, text=suffix, anchor=CENTER,
-                                            fill="#9eaab7", font=("Helvetica", 8), tags=tag_name)
+                                            fill="#9eaab7", font=("Helvetica", 9, "bold"), tags=tag_name)
             
             # Interaction Bindings
             self.bookmark_canvas.tag_bind(tag_name, "<Button-1>", lambda e, idx=i: self.jump_to_image(idx))
