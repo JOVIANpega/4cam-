@@ -19,7 +19,7 @@ import tempfile
 import shutil
 from ttkbootstrap.scrolled import ScrolledFrame
 
-VERSION = "1.3.0"
+VERSION = "1.5.0"
 
 class SplicingGUI:
     def __init__(self, root):
@@ -204,8 +204,40 @@ class SplicingGUI:
         self.img_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.img_tab, text=" [ 圖片顯示 (Image View) ] ")
         
+        # v1.9.1: Main Layout Split using PanedWindow (Left: Image+Snaps, Right: Grid Sidebar)
+        self.img_paned = ttk.PanedWindow(self.img_tab, orient=HORIZONTAL)
+        self.img_paned.pack(fill=BOTH, expand=YES)
+
+        # Left main area (Navigation bar + Image + Snapshots)
+        self.img_left_area = ttk.Frame(self.img_paned)
+        self.img_paned.add(self.img_left_area, weight=5)
+
+        # Right sidebar for the navigation grid
+        # v1.9.6: Use a safer default and minimum width
+        self.saved_sidebar_w = self.gui_config.get("img_sidebar_width", 350)
+        if self.saved_sidebar_w < 50: self.saved_sidebar_w = 350
+        
+        self.sidebar_outer = ttk.Frame(self.img_paned, width=self.saved_sidebar_w)
+        self.img_paned.add(self.sidebar_outer, weight=0)
+
+        # Restore img_paned sash (v1.9.6: More robust multi-stage restoration)
+        def _do_restore():
+             try:
+                 self.root.update_idletasks()
+                 total_w = self.img_paned.winfo_width()
+                 if total_w > 100:
+                     # Calculate X position from right
+                     target_x = total_w - self.saved_sidebar_w
+                     if 50 < target_x < total_w - 50:
+                        self.img_paned.sashpos(0, target_x)
+             except: pass
+
+        # Try once soon, and once later after window fully settles
+        self.root.after(400, _do_restore)
+        self.root.after(1000, _do_restore)
+
         # 1. Navigation at TOP
-        self.nav_frame = ttk.Frame(self.img_tab, padding=(10, 2))
+        self.nav_frame = ttk.Frame(self.img_left_area, padding=(10, 2))
         self.nav_frame.pack(fill=X, side=TOP)
         
         self.nav_label = ttk.Label(self.nav_frame, text="0 / 0", font=("Helvetica", 11, "bold"))
@@ -215,14 +247,15 @@ class SplicingGUI:
         self.source_label = ttk.Label(self.nav_frame, text="[ 未載入 ]", font=("Microsoft JhengHei", 10))
         self.source_label.pack_forget() # Watermark will handle this (v1.5.3)
         
-        # 2. Console Area at BOTTOM (Expanded v1.5.0)
-        self.preview_outer = ttk.Frame(self.img_tab, height=330) 
+        # 2. Console Area at BOTTOM (Snapshots ONLY - Reduced height v1.9.0)
+        self.preview_outer = ttk.Frame(self.img_left_area, height=160) 
         self.preview_outer.pack(fill=X, side=BOTTOM, padx=5, pady=5)
         self.preview_outer.pack_propagate(False)
         
-        # --- Section A: Target Snapshots (Now at the TOP of the console) ---
+        # --- Section A: Target Snapshots ---
         lbl_preview = ttk.Label(self.preview_outer, text="🔍 目前目標區塊快照 (Target Snapshots):", font=("Helvetica", 12, "bold"))
         lbl_preview.pack(anchor=W, padx=5, pady=(5, 2))
+        self.font_widgets_labels.append(lbl_preview)
         
         preview_scroll = ttk.Scrollbar(self.preview_outer, orient=HORIZONTAL)
         preview_scroll.pack(side=TOP, fill=X) # Scrollbar for snapshots
@@ -236,33 +269,41 @@ class SplicingGUI:
         self.preview_canvas.create_window((0, 0), window=self.preview_frame, anchor=NW)
         self.preview_frame.bind("<Configure>", lambda e: self.preview_canvas.configure(scrollregion=self.preview_canvas.bbox("all")))
         self.preview_widgets = []
-        
-        ttk.Separator(self.preview_outer, orient=HORIZONTAL).pack(fill=X, pady=10)
 
-        # --- Section B: Image Navigation Grid (8 Columns x Multiple Rows) ---
-        grid_header = ttk.Frame(self.preview_outer)
-        grid_header.pack(fill=X)
-        ttk.Label(grid_header, text="📑 批次進度控制 (Batch Navigation Grid):", font=("Helvetica", 12, "bold")).pack(side=LEFT, padx=5)
+        # 3. Canvas in the MIDDLE
+        self.canvas_frame = ttk.Frame(self.img_left_area)
+        self.canvas_frame.pack(fill=BOTH, expand=YES)
         
-        self.bookmark_outer = ttk.Frame(self.preview_outer)
-        self.bookmark_outer.pack(fill=BOTH, expand=YES, padx=10, pady=5)
+        self.canvas = tk.Canvas(self.canvas_frame, bg="#1a1a1a", highlightthickness=0)
+        self.canvas.pack(fill=BOTH, expand=YES)
+
+        # --- Section B: Image Navigation Grid (Now inside Sidebar) ---
+        grid_header = ttk.Frame(self.sidebar_outer)
+        grid_header.pack(fill=X, pady=(5, 5))
+        lbl_grid = ttk.Label(grid_header, text="📑 批次清單 (Batch List):", font=("Helvetica", 12, "bold"))
+        lbl_grid.pack(side=LEFT, padx=5)
+        self.font_widgets_labels.append(lbl_grid)
         
-        # Grid Scrollbar (Vertical if many rows)
+        # Helper label for context
+        lbl_sub = ttk.Label(self.sidebar_outer, text="[點擊可快速切換圖片]", font=("Microsoft JhengHei", 9), foreground="gray")
+        lbl_sub.pack(anchor=W, padx=10, pady=(0, 5))
+        self.font_widgets_labels.append(lbl_sub)
+        
+        self.bookmark_outer = ttk.Frame(self.sidebar_outer)
+        self.bookmark_outer.pack(fill=BOTH, expand=YES, padx=5, pady=5)
+        
+        # Grid Scrollbar (Vertical - Standard for sidebars)
         bookmark_scroll = ttk.Scrollbar(self.bookmark_outer, orient=VERTICAL)
         bookmark_scroll.pack(side=RIGHT, fill=Y)
         
-        self.bookmark_canvas = tk.Canvas(self.bookmark_outer, height=140, bg="#1a1a1a", highlightthickness=0,
+        self.bookmark_canvas = tk.Canvas(self.bookmark_outer, bg="#1a1a1a", highlightthickness=0,
                                          yscrollcommand=bookmark_scroll.set)
         self.bookmark_canvas.pack(side=LEFT, fill=BOTH, expand=YES)
         bookmark_scroll.config(command=self.bookmark_canvas.yview)
         self.bookmark_widgets = []
 
-        # 3. Canvas in the MIDDLE
-        self.canvas_frame = ttk.Frame(self.img_tab)
-        self.canvas_frame.pack(fill=BOTH, expand=YES)
-        
-        self.canvas = tk.Canvas(self.canvas_frame, bg="#1a1a1a", highlightthickness=0)
-        self.canvas.pack(fill=BOTH, expand=YES)
+        # Bind resize event to reflow grid items
+        self.bookmark_canvas.bind("<Configure>", lambda e: self.update_nav_ui())
         
         # --- TAB 2: Settings ---
         self.settings_tab = ttk.Frame(self.notebook)
@@ -488,7 +529,8 @@ class SplicingGUI:
             "gui_font_size": 12,
             "check_distortion": False,
             "dist_thd": 1.12,
-            "mag_factor": 1.5
+            "mag_factor": 1.5,
+            "img_sidebar_width": 240
         }
         
         if os.path.exists(self.config_path):
@@ -528,6 +570,15 @@ class SplicingGUI:
             self.gui_config["check_distortion"] = self.check_distortion_var.get()
             self.gui_config["dist_thd"] = self.dist_thd_var.get()
             self.gui_config["mag_factor"] = self.mag_factor_var.get()
+            
+            # CRITICAL: Only save width if the widget is actually drawn (>10px)
+            # This prevents saving 1px width when closing while on a different tab.
+            curr_w = self.sidebar_outer.winfo_width()
+            if curr_w > 50:
+                self.gui_config["img_sidebar_width"] = curr_w
+            
+            # Legacy cleanup
+            if "img_sash_pos" in self.gui_config: del self.gui_config["img_sash_pos"]
             
             with open(self.config_path, 'w') as f:
                 json.dump(self.gui_config, f)
@@ -1546,47 +1597,65 @@ class SplicingGUI:
         
         # Clear and redraw bookmarks
         self.bookmark_canvas.delete("all")
-        dot_w = 40  
-        dot_h = 40
-        gap = 10 
         
-        # Dynamic Columns based on canvas width
+        # v1.9.4: Sidebar optimized layout (Text below square)
+        dot_w = 38 
+        dot_h = 38
+        gap_y = 25 # Increase gap to fit text below
+        
         canvas_w = self.bookmark_canvas.winfo_width()
-        if canvas_w < 100: canvas_w = 400 # Initial fallback
+        if canvas_w < 50: canvas_w = 240 
         
-        cols = max(1, (canvas_w - 20) // (dot_w + gap))
+        # Calculate columns: Items are narrower because text is below
+        # Logic: 38(square) + 15(horizontal gap) ~= 55px width per column
+        cols = max(1, (canvas_w - 10) // 55)
+        item_w = (canvas_w - 10) // cols
         
-        start_offset_x = 10 
+        start_offset_x = 10
         for i, path in enumerate(self.batch_files):
             color = "#444444" # Unprocessed
             if path in self.analysis_history:
                 color = "#00FF00" if self.analysis_history[path].get('is_pass') else "#FF0000"
             
-            # Grid coordinates (x, y)
+            # Grid coordinates
             row = i // cols
             col = i % cols
             
-            x = start_offset_x + col * (dot_w + gap)
-            y = row * (dot_h + gap) + 5
+            x = start_offset_x + col * item_w
+            y = row * (dot_h + gap_y) + 10
             
             # Highlight current
-            outline = "white" if i == self.batch_index else ""
-            width = 3 if i == self.batch_index else 0
-            # Draw square
+            outline = "#007bff" if i == self.batch_index else "#333333"
+            width = 3 if i == self.batch_index else 1
+            
             tag_name = f"btn_{i}"
+            # Draw square
             self.bookmark_canvas.create_rectangle(x, y, x + dot_w, y + dot_h, 
-                                                               fill=color, outline=outline, width=width, tags=tag_name)
+                                                fill=color, outline=outline, width=width, tags=tag_name)
             
             # Add number
             self.bookmark_canvas.create_text(x + dot_w/2, y + dot_h/2, text=str(i+1), 
                                             fill="white", font=("Helvetica", 11, "bold"), tags=tag_name)
+            
+            # v1.9.4: Add filename suffix BELOW square
+            fname = os.path.basename(path)
+            parts = fname.replace('.', '_').split('_')
+            cam_parts = [p for p in parts if p.lower().startswith('cam')]
+            suffix = cam_parts[-1] if cam_parts else (parts[-2] if len(parts) > 1 else parts[0][:5])
+            
+            if len(suffix) > 8: suffix = suffix[:7] + ".."
+            
+            text_x = x + dot_w / 2
+            text_y = y + dot_h + 12 # Directly below square
+            self.bookmark_canvas.create_text(text_x, text_y, text=suffix, anchor=CENTER,
+                                            fill="#9eaab7", font=("Helvetica", 8), tags=tag_name)
             
             # Interaction Bindings
             self.bookmark_canvas.tag_bind(tag_name, "<Button-1>", lambda e, idx=i: self.jump_to_image(idx))
             self.bookmark_canvas.tag_bind(tag_name, "<Enter>", lambda e, idx=i: self.bookmark_hover_enter(idx))
             self.bookmark_canvas.tag_bind(tag_name, "<Leave>", lambda e: self.on_bookmark_leave())
         
-        # Dynamic Scroll Region
+        # Dynamic Scroll Region (Vertical)
         self.bookmark_canvas.config(scrollregion=self.bookmark_canvas.bbox("all"))
 
     def bookmark_hover_enter(self, index):
@@ -1630,6 +1699,8 @@ class SplicingGUI:
         self.update_nav_ui()
 
     def on_tab_change(self, event):
+        # v1.9.6: Force save config when switching tabs to capture sizes while visible
+        self.save_config()
         """Clear overlays and popups when leaving Image View tab."""
         # index 0 is Image View
         if self.notebook.index("current") != 0:

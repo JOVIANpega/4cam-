@@ -16,6 +16,9 @@ if "%APP_VERSION%"=="" (
     echo [OK] Detected Version: %APP_VERSION%
 )
 
+set DIST_NAME=SplicingCheckSystem_V%APP_VERSION%
+set DIST_PATH=dist\!DIST_NAME!
+
 echo.
 echo [1/3] Performance Optimization...
 :: Using --onedir (Folder mode) for instant startup
@@ -24,9 +27,8 @@ echo Defaulting to FOLDER MODE.
 
 echo.
 echo [2/3] Building Package...
-:: Using the version in the name
 pyinstaller %BUILD_MODE% --noconsole --clean ^
-            --name "SplicingCheckSystem_V%APP_VERSION%" ^
+            --name "!DIST_NAME!" ^
             --hidden-import scipy.signal ^
             --collect-submodules scipy ^
             --collect-all ttkbootstrap ^
@@ -38,14 +40,22 @@ pyinstaller %BUILD_MODE% --noconsole --clean ^
             main.py
 
 echo.
-echo [3/3] Finalizing...
+echo [3/3] Deploying Assets...
+echo [+] Copying MANUAL.html...
+copy /Y "MANUAL.html" "!DIST_PATH!\"
+
+echo [+] Copying pic folder...
+xcopy /E /I /Y "pic" "!DIST_PATH!\pic"
+
+echo.
+echo [4/4] Finalizing...
 rmdir /s /q build
-del /q SplicingCheckSystem_V%APP_VERSION%.spec
+del /q "!DIST_NAME!.spec"
 
 echo.
 echo ===================================================
 echo   BUILD COMPLETE!
 echo   Version: %APP_VERSION%
-echo   Location: dist\SplicingCheckSystem_V%APP_VERSION%
+echo   Location: !DIST_PATH!
 echo ===================================================
 pause
