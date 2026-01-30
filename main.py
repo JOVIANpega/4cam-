@@ -198,8 +198,12 @@ class SplicingGUI:
         self.nav_frame = ttk.Frame(self.img_tab, padding=(10, 2))
         self.nav_frame.pack(fill=X, side=TOP)
         
-        self.nav_label = ttk.Label(self.nav_frame, text="0 / 0", font=("Helvetica", 10, "bold"))
-        self.nav_label.pack(side=LEFT, padx=10)
+        self.nav_label = ttk.Label(self.nav_frame, text="0 / 0", font=("Helvetica", 11, "bold"))
+        self.nav_label.pack_forget() # Watermark will handle this (v1.5.3)
+        
+        # v1.5.2: Source Title
+        self.source_label = ttk.Label(self.nav_frame, text="[ 未載入 ]", font=("Microsoft JhengHei", 10))
+        self.source_label.pack_forget() # Watermark will handle this (v1.5.3)
         
         # 2. Console Area at BOTTOM (Expanded v1.5.0)
         self.preview_outer = ttk.Frame(self.img_tab, height=330) 
@@ -207,7 +211,7 @@ class SplicingGUI:
         self.preview_outer.pack_propagate(False)
         
         # --- Section A: Target Snapshots (Now at the TOP of the console) ---
-        lbl_preview = ttk.Label(self.preview_outer, text="🔍 目前目標區塊快照 (Target Snapshots):", font=("Helvetica", 9, "bold"))
+        lbl_preview = ttk.Label(self.preview_outer, text="🔍 目前目標區塊快照 (Target Snapshots):", font=("Helvetica", 12, "bold"))
         lbl_preview.pack(anchor=W, padx=5, pady=(5, 2))
         
         preview_scroll = ttk.Scrollbar(self.preview_outer, orient=HORIZONTAL)
@@ -228,7 +232,7 @@ class SplicingGUI:
         # --- Section B: Image Navigation Grid (8 Columns x Multiple Rows) ---
         grid_header = ttk.Frame(self.preview_outer)
         grid_header.pack(fill=X)
-        ttk.Label(grid_header, text="📑 批次進度控制 (Batch Navigation Grid):", font=("Helvetica", 9, "bold")).pack(side=LEFT, padx=5)
+        ttk.Label(grid_header, text="📑 批次進度控制 (Batch Navigation Grid):", font=("Helvetica", 12, "bold")).pack(side=LEFT, padx=5)
         
         self.bookmark_outer = ttk.Frame(self.preview_outer)
         self.bookmark_outer.pack(fill=BOTH, expand=YES, padx=10, pady=5)
@@ -838,35 +842,52 @@ class SplicingGUI:
                 self.log(f"讀取壓縮檔 {a_name} 失敗: {str(e)}")
 
         if extracted_files:
+            # Update source label for archives
+            if len(archive_paths) == 1:
+                self.source_label.config(text=f"📦 當前壓縮檔: {os.path.basename(archive_paths[0])}")
+            else:
+                self.source_label.config(text=f"📦 多重壓縮檔 ({len(archive_paths)} 個)")
+                
             self.analysis_history = {} # Reset for new batch
             self.batch_files = extracted_files
             self.batch_index = 0
             self.current_image_path = self.batch_files[0]
             self.display_image(self.current_image_path)
             self.update_nav_ui()
+            self.notebook.select(0)
             
-            msg = f"載入成功！共從壓縮檔中提取 {len(extracted_files)} 張符合關鍵字 '{keyword}' 的圖片。\n\n是否立即開始分析？"
+            msg = f"載入成功！共從壓縮檔中提取 {len(extracted_files)} 張符合關鍵字 '{keyword}' 的圖片。"
             self.log(msg)
             
-            # Use askokcancel to allow user to stop here if count is wrong (v1.3.2: Direct start 'all')
-            if tk.messagebox.askokcancel("載入完成", msg):
-                self.notebook.select(0) # Switch to Image View
+            if self.auto_analyze_var.get():
                 self.start_analysis(mode="all")
             else:
-                self.log("使用者取消自動分析。")
+                self.clear_previews()
         else:
             self.log(f"找不到符合關鍵字 '{keyword}' 的影像檔案。")
 
     def load_folder(self):
         folder = filedialog.askdirectory(initialdir=self.last_dir)
-        if folder:
+        if not folder: return
+        
+        try:
             self.last_dir = folder
             if self.auto_clear_log_var.get():
                 self.clear_log()
             
-            keyword = self.zip_filter_var.get().strip().lower()
-            all_imgs = [f for f in os.listdir(folder) if f.lower().endswith(('.jpg', '.png', '.bmp'))]
+            # Update source label immediately for feedback
+            self.source_label.config(text=f"📂 當前資料夾: {os.path.basename(folder)}")
             
+            # v1.6.1: Improved Diagnostic - list ALL files first for troubleshooting
+            # Added .jpeg support
+            itms = os.listdir(folder)
+            all_files_cnt = len([f for f in itms if os.path.isfile(os.path.join(folder, f))])
+            valid_exts = ('.jpg', '.jpeg', '.png', '.bmp')
+            all_imgs = [f for f in itms if f.lower().endswith(valid_exts)]
+            
+            self.log(f"正在掃描資料夾: {folder} (共找到 {all_files_cnt} 個檔案)")
+            
+            keyword = self.zip_filter_var.get().strip().lower()
             if keyword:
                 self.batch_files = [os.path.join(folder, f) for f in all_imgs if keyword in f.lower()]
             else:
@@ -876,21 +897,37 @@ class SplicingGUI:
                 self.analysis_history = {}
                 self.batch_index = 0
                 self.current_image_path = self.batch_files[0]
+                
+                # Force UI Update sequence
                 self.update_nav_ui()
                 self.display_image(self.current_image_path)
                 self.notebook.select(0)
                 
                 filter_msg = f" (關鍵字篩選: '{keyword}')" if keyword else ""
-                msg = f"已載入資料夾: {folder}\n共發現 {len(all_imgs)} 張照片，已載入 {len(self.batch_files)} 張{filter_msg}"
-                self.log(msg)
-                tk.messagebox.showinfo("載入成功", msg)
+                log_msg = f"載入成功: 已從 {len(all_imgs)} 張符合格式的照片中，載入 {len(self.batch_files)} 張{filter_msg}"
+                self.log(log_msg)
+                self.status_var.set(f"載入成功: {len(self.batch_files)} 張")
                 
                 if self.auto_analyze_var.get():
                     self.start_analysis(mode="all")
                 else:
                     self.clear_previews()
             else:
-                self.log("資料夾內未發現支援的照片格式。")
+                if keyword and all_imgs:
+                    msg = f"資料夾內有 {len(all_imgs)} 張照片，但檔名皆不包含關鍵字 '{keyword}'。"
+                    self.log(msg)
+                    tk.messagebox.showwarning("篩選結果為空", msg)
+                else:
+                    # v1.6.2: Add hint of what WAS found to help user realize if they chose wrong folder
+                    other_files = [f for f in itms if os.path.isfile(os.path.join(folder, f))][:3]
+                    hint = f"\n資料夾內的前幾個檔案為: {', '.join(other_files)}" if other_files else "\n資料夾完全為空。"
+                    msg = f"未發現支援格式 (*.jpg, *.jpeg, *.png, *.bmp)。\n資料夾檔案總數: {all_files_cnt}{hint}"
+                    self.log(msg)
+                    tk.messagebox.showerror("載入失敗", msg)
+                    self.status_var.set("無效資料夾")
+        except Exception as e:
+            self.log(f"載入資料夾時發生未預期錯誤: {str(e)}")
+            self.status_var.set("載入異常")
 
     def display_image(self, path, overlay_info=None, refresh_log=False):
         if path is None:
@@ -986,123 +1023,149 @@ class SplicingGUI:
                     if (rx2 - rx1) < 20: rx1, rx2 = rx1 - 10, rx2 + 10
                     if (ry2 - ry1) < 20: ry1, ry2 = ry1 - 10, ry2 + 10
 
+                    if not self.hide_result_permanently and not self.is_analyzing:
+                        # Create a transparent layer for the text background
+                        try:
+                            # v1.5.8: Use alpha 60 for clean transparency (approx. 75% transparent)
+                            text_str = status_text
+                            t_bbox = draw.textbbox((rx1, ry1 - font_size - 10), text_str, font=target_font)
+                            bg_w, bg_h = img_resized.size
+                            overlay = Image.new('RGBA', (bg_w, bg_h), (0, 0, 0, 0))
+                            overlay_draw = ImageDraw.Draw(overlay)
+                            
+                            bg_padding = 5
+                            bg_label = [t_bbox[0]-bg_padding, t_bbox[1]-bg_padding, t_bbox[2]+bg_padding, t_bbox[3]+bg_padding]
+                            # v1.5.8: High transparency (Alpha 60)
+                            overlay_draw.rectangle(bg_label, fill=(0, 0, 0, 60)) 
+                            img_resized.paste(overlay, (0, 0), overlay)
+                            
+                            # Re-bind draw object and write text
+                            draw = ImageDraw.Draw(img_resized)
+                            draw.text((rx1, ry1 - font_size - 10), text_str, fill=color, font=target_font)
+                        except:
+                            pass
+
+                    # Always draw the bounding boxes
                     for i in range(4):
                         draw.rectangle([rx1-i, ry1-i, rx2+i, ry2+i], outline=color, width=3)
-                    
-                    # Draw high-contrast black background for text
-                    text_str = status_text
-                    try:
-                        t_bbox = draw.textbbox((rx1, ry1 - font_size - 10), text_str, font=target_font)
-                        # Add some padding to the background box
-                        bg_padding = 5
-                        bg_label = [t_bbox[0]-bg_padding, t_bbox[1]-bg_padding, t_bbox[2]+bg_padding, t_bbox[3]+bg_padding]
-                        draw.rectangle(bg_label, fill=(0, 0, 0, 180)) # Semi-transparent black
-                    except:
-                        # Fallback if textbbox is missing
-                        draw.rectangle([rx1, ry1 - font_size - 15, rx1 + 300, ry1 - 5], fill=(0, 0, 0, 180))
-                        
-                    # Draw status text on top of the black box
-                    draw.text((rx1, ry1 - font_size - 10), text_str, fill=color, font=target_font)
 
                 # 3. Draw Watermark Final Result (Top Layer)
                 final_res = overlay_info.get('final_result')
                 if final_res and not self.hide_result_permanently:
-                    # Draw semi-transparent black overlay
                     overlay_layer = Image.new('RGBA', (new_w, new_h), (0, 0, 0, 200))
                     img_resized.paste(overlay_layer, (0, 0), overlay_layer)
-                    
-                    # Need to rebuild draw object after paste
                     draw = ImageDraw.Draw(img_resized)
+                    
                     res_text = "PASS" if final_res == 'pass' else "FAIL"
                     res_color = "#00FF00" if final_res == 'pass' else "#FF0000"
                     
                     try:
-                        from PIL import ImageFont
                         font_paths = ["C:\\Windows\\Fonts\\arialbd.ttf", "arial.ttf"]
-                        font = None
+                        f_giant = None
                         for fp in font_paths:
                             if os.path.exists(fp):
-                                font = ImageFont.truetype(fp, 180)
+                                f_giant = ImageFont.truetype(fp, 180)
                                 break
-                        if not font: font = ImageFont.load_default()
-                    except:
-                        font = None
-                    
-                    # Center text (v1.2.1: Filename + Result)
-                    try:
+                        if not f_giant: f_giant = ImageFont.load_default()
+                        
+                        f_small = None
+                        for fp in font_paths:
+                            if os.path.exists(fp):
+                                f_small = ImageFont.truetype(fp, 60)
+                                break
+                        if not f_small: f_small = ImageFont.load_default()
+                        
+                        # Source/Index fonts
+                        try:
+                            f_src = ImageFont.truetype("msjhbd.ttc", 35) # Blueish Source
+                            f_nav = ImageFont.truetype("arialbd.ttf", 45) # Grey Index
+                        except:
+                            f_src = ImageFont.load_default()
+                            f_nav = ImageFont.load_default()
+
                         fname = os.path.basename(path)
-                        # Load smaller font for filename
-                        small_font = None
-                        for fp in font_paths:
-                            if os.path.exists(fp):
-                                small_font = ImageFont.truetype(fp, 60)
-                                break
-                        if not small_font: small_font = ImageFont.load_default()
+                        source_raw = self.source_label.cget("text")
+                        nav_text = f"{self.batch_index + 1} / {len(self.batch_files)}"
                         
-                        # Get dimensions
-                        f_bbox = draw.textbbox((0, 0), fname, font=small_font)
-                        wf, hf = f_bbox[2] - f_bbox[0], f_bbox[3] - f_bbox[1]
+                        # Decide if we show source/index
+                        show_source = len(self.batch_files) > 1 and "[ 未載入 ]" not in source_raw
+                        show_index = len(self.batch_files) > 1
+
+                        # Get all dimensions
+                        ws, hs = (0, 0)
+                        if show_source:
+                            s_bbox = draw.textbbox((0,0), source_raw, font=f_src)
+                            ws, hs = s_bbox[2]-s_bbox[0], s_bbox[3]-s_bbox[1]
                         
-                        t_bbox = draw.textbbox((0, 0), res_text, font=font)
-                        wt, ht = t_bbox[2] - t_bbox[0], t_bbox[3] - t_bbox[1]
+                        f_bbox = draw.textbbox((0,0), fname, font=f_small)
+                        wf, hf = f_bbox[2]-f_bbox[0], f_bbox[3]-f_bbox[1]
                         
-                        # Calculate vertical stack
+                        t_bbox = draw.textbbox((0,0), res_text, font=f_giant)
+                        wt, ht = t_bbox[2]-t_bbox[0], t_bbox[3]-t_bbox[1]
+                        
+                        # Layout spacing
                         spacing = 30
-                        total_h = hf + wt + spacing
-                        start_y = (new_h - total_h) // 2
+                        total_h = hf + ht + spacing
+                        if show_source: total_h += hs + spacing
                         
-                        # Draw Filename (White)
-                        draw.text(((new_w - wf) // 2, start_y), fname, fill="white", font=small_font)
-                        # Draw Result (Green/Red)
-                        draw.text(((new_w - wt) // 2, start_y + hf + spacing), res_text, fill=res_color, font=font)
+                        current_y = (new_h - total_h) // 2
                         
-                        # v1.4.2: COLOR-CODED DETAILED LOG OVERLAY (Matches main log colors)
-                        if path in self.analysis_history and 'log_entries' in self.analysis_history[path]:
-                            log_info = []
-                            for msg, tag in self.analysis_history[path]['log_entries']:
-                                if any(x in msg for x in ["=====", "正在分析", "參數值", "已載入", "----------"]):
-                                    continue
-                                log_info.append((msg, tag))
-                            
-                            if log_info:
-                                try:
-                                    d_font = ImageFont.truetype("msjhbd.ttc", 18) 
-                                except:
-                                    try: d_font = ImageFont.truetype("msgothic.ttc", 18)
-                                    except: d_font = ImageFont.load_default()
-                                
-                                # Positioning & Aesthetic details
-                                pad = 15
-                                tx, ty = 30, 30
-                                
-                                # First, calculate total size for background box
-                                total_w = 0
-                                total_h = 0
-                                for msg, tag in log_info:
-                                    box = draw.textbbox((0, 0), msg, font=d_font)
-                                    total_w = max(total_w, box[2] - box[0])
-                                    total_h += (box[3] - box[1]) + 5
-                                
-                                # Draw elegant background card
-                                draw.rectangle([tx-pad, ty-pad, tx+total_w+pad+20, ty+total_h+pad], 
-                                               fill=(0, 0, 0, 110)) 
-                                
-                                # Draw each line with its corresponding color
-                                current_y = ty
-                                for msg, tag in log_info:
-                                    # Color Mapping based on tags
-                                    l_color = "#e0e0e0" # Default
-                                    if tag == "pass_text": l_color = "#00FF00" # Green
-                                    elif tag == "fail_text": l_color = "#FF0000" # Red
-                                    elif tag == "blue_text": l_color = "#00BFFF" # Deep Sky Blue
-                                    
-                                    draw.text((tx, current_y), msg, fill=l_color, font=d_font)
-                                    box = draw.textbbox((0, 0), msg, font=d_font)
-                                    current_y += (box[3] - box[1]) + 5
-                                
+                        # 1. Source (Cyan) - Conditional
+                        if show_source:
+                            draw.text(((new_w - ws) // 2, current_y), source_raw, fill="#00CED1", font=f_src)
+                            current_y += hs + spacing
+                        
+                        # 2. Filename (White)
+                        draw.text(((new_w - wf) // 2, current_y), fname, fill="white", font=f_small)
+                        current_y += hf + spacing
+                        
+                        # 3. Main Result (Green/Red)
+                        draw.text(((new_w - wt) // 2, current_y), res_text, fill=res_color, font=f_giant)
+                        
+                        # 4. Large Index (Grey) - Conditional
+                        if show_index:
+                            draw.text(((new_w + wt) // 2 + 35, current_y + 40), nav_text, fill="#AAAAAA", font=f_nav)
+
                     except Exception as e:
-                        print(f"Overlay drawing error: {e}")
-                        draw.text((new_w//2 - 100, new_h//2), res_text, fill=res_color)
+                        print(f"Result Overlay Error: {e}")
+
+                # --- SPEC ISSUE LOG ---
+                if not self.is_analyzing and path in self.analysis_history and 'log_entries' in self.analysis_history[path]:
+                    log_info = []
+                    for msg, tag in self.analysis_history[path]['log_entries']:
+                        if any(x in msg for x in ["=====", "正在分析", "參數值", "已載入", "----------"]):
+                            continue
+                        log_info.append((msg, tag))
+                    
+                    if log_info:
+                        try:
+                            d_font = ImageFont.truetype("msjhbd.ttc", 18) 
+                            pad, tx, ty = 15, 30, 120 
+                            
+                            total_w, total_h = 0, 0
+                            for msg, tag in log_info:
+                                box = draw.textbbox((0, 0), msg, font=d_font)
+                                total_w = max(total_w, box[2]-box[0])
+                                total_h += (box[3]-box[1]) + 5
+                            
+                            # v1.5.8: Alpha 60 for truly subtle transparency
+                            log_overlay = Image.new('RGBA', (new_w, new_h), (0, 0, 0, 0))
+                            lo_draw = ImageDraw.Draw(log_overlay)
+                            lo_draw.rectangle([tx-pad, ty-pad, tx+total_w+pad+20, ty+total_h+pad], fill=(0, 0, 0, 60)) 
+                            img_resized.paste(log_overlay, (0, 0), log_overlay)
+                            
+                            draw = ImageDraw.Draw(img_resized)
+                            curr_log_y = ty
+                            for msg, tag in log_info:
+                                lc = "#e0e0e0"
+                                if tag == "pass_text": lc = "#00FF00"
+                                elif tag == "fail_text": lc = "#FF0000"
+                                elif tag == "blue_text": lc = "#00BFFF"
+                                draw.text((tx, curr_log_y), msg, fill=lc, font=d_font)
+                                b = draw.textbbox((0,0), msg, font=d_font)
+                                curr_log_y += (b[3]-b[1]) + 5
+                        except Exception as e:
+                            print(f"Spec Log Overlay Error: {e}")
                 
 
             self.tk_img = ImageTk.PhotoImage(img_resized)
@@ -1184,18 +1247,11 @@ class SplicingGUI:
             # However, typically people use mag to see details, then move out to see result.
             self.redraw_current()
 
-    def safe_update_ui(self, path, overlay):
+    def safe_update_ui(self, path, overlay, rect_for_arrow=None):
         try:
-            # Sanitize overlay text to prevent Tcl/Tk Latin-1 encoding errors with Chinese characters
-            if 'text' in overlay:
-                # Convert descriptive status back to simple tags for internal display if needed, 
-                # but better to just handle the encoding by keeping it simple
-                raw_text = overlay['text']
-                # If we need Chinese in the image but ASCII in the Tcl call, 
-                # we keep it in the dict and handle drawing separately, or just sanitize
-                pass 
-            
             self.display_image(path, overlay)
+            if rect_for_arrow:
+                self.show_target_arrow(rect_for_arrow)
             self.root.update_idletasks()
             self.root.update()
         except Exception as e:
@@ -1210,7 +1266,13 @@ class SplicingGUI:
         
         if self.is_analyzing: return
         
-        self.analysis_mode = mode
+        # v1.5.9: If multiple files are loaded, clicking Start Analysis should re-check everything
+        if len(self.batch_files) > 1:
+            self.analysis_mode = "all"
+            self.batch_index = 0 # Reset to start for full re-check
+        else:
+            self.analysis_mode = "single"
+            
         self.hide_result_permanently = False 
         self.is_analyzing = True
         self.notebook.select(0) 
@@ -1298,9 +1360,9 @@ class SplicingGUI:
                 force_fail = step.get('force_fail')
                 
                 # Animation Start - Yellow Box
-                # Use viz_rect if available for drawing, but calculation stays the same
                 overlay = {'rect': step.get('viz_rect', step['rect']), 'text': "SCANNING", 'status': 'checking'}
-                self.root.after(0, self.safe_update_ui, path, overlay.copy())
+                # v1.5.9: Pass rect to show FOCUS arrow during scan
+                self.root.after(0, self.safe_update_ui, path, overlay.copy(), step['rect'])
                 time.sleep(0.7) 
                 
                 if force_fail is not None:
@@ -1338,7 +1400,8 @@ class SplicingGUI:
                 # Animation Done - Result Box
                 overlay['text'] = status_text
                 overlay['status'] = status_tag
-                self.root.after(0, self.safe_update_ui, path, overlay.copy())
+                # v1.5.9: Maintain arrow visibility on result step
+                self.root.after(0, self.safe_update_ui, path, overlay.copy(), step['rect'])
                 
                 fail_msg = "" if is_pass else f" (THRESHOLD {self.fail_thd_var.get()}px)"
                 self.log(f"  Target {step['index']}: {shift} px -> {'PASS' if is_pass else 'FAIL'}{fail_msg}")
@@ -1416,6 +1479,8 @@ class SplicingGUI:
                 self.analysis_history[path]['is_pass'] = image_pass
             
             self.root.after(0, self.update_nav_ui)
+            # Final Giant Overlay - Hide scan arrow
+            self.root.after(0, self.hide_target_arrow) 
             self.root.after(0, self.safe_update_ui, path, final_overlay)
             time.sleep(1.2) 
         except Exception as e:
@@ -1439,9 +1504,14 @@ class SplicingGUI:
         self.bookmark_canvas.delete("all")
         dot_w = 40  
         dot_h = 40
-        gap = 8
-        cols = 8 # Display 8 squares per row as requested
+        gap = 10 # Slightly more gap for 50+ images layout
+        cols = 8 
         
+        # v1.5.2: Center the grid if there's enough space
+        canvas_w = self.bookmark_canvas.winfo_width()
+        if canvas_w < 100: canvas_w = 400
+        grid_width = (cols * dot_w) + ((cols - 1) * gap)
+        start_offset_x = 10 # Start from left
         for i, path in enumerate(self.batch_files):
             color = "#444444" # Unprocessed
             if path in self.analysis_history:
@@ -1451,7 +1521,7 @@ class SplicingGUI:
             row = i // cols
             col = i % cols
             
-            x = col * (dot_w + gap) + 5
+            x = start_offset_x + col * (dot_w + gap)
             y = row * (dot_h + gap) + 5
             
             # Highlight current
@@ -1560,7 +1630,7 @@ class SplicingGUI:
                 info_frame.pack(side=LEFT, padx=10)
                 
                 status_zh = "通過" if status == 'pass' else "不合格"
-                lbl_index = ttk.Label(info_frame, text=f"目標 T{index}", font=("Helvetica", 10, "bold"))
+                lbl_index = ttk.Label(info_frame, text=f"目標 T{index}", font=("Helvetica", 16, "bold"))
                 lbl_index.pack(anchor=W)
                 
                 lbl_shift_x = ttk.Label(info_frame, text=f"位移: {shift}px", font=("Helvetica", 9))
@@ -1629,46 +1699,55 @@ class SplicingGUI:
         self.root.after(0, _add)
 
     def show_target_arrow(self, rect):
-        """Draw a high-visibility diagonal arrow and a box around the target area."""
+        """Draw a high-visibility diagonal arrow and a box around the target area (v1.5.1)."""
         if not hasattr(self, 'current_ratio'): return
         
         rx1, ry1, rx2, ry2 = rect
         ratio = self.current_ratio
         
-        # Canvas coordinates (North anchor +10 offset)
-        tx1, ty1 = int(rx1 * ratio), int(ry1 * ratio) + 10
-        tx2, ty2 = int(rx2 * ratio), int(ry2 * ratio) + 10
-        center_x = (tx1 + tx2) // 2
-        center_y = (ty1 + ty2) // 2
+        # v1.5.1: Calculate accurate offsets based on centered image (v1.4.3 layout)
+        canvas_w = self.canvas.winfo_width()
+        canvas_h = self.canvas.winfo_height()
+        
+        # We need original img_w/h to know the resized w/h
+        if not hasattr(self, '_cached_img'): return
+        img_w, img_h = self._cached_img.size
+        new_w, new_h = int(img_w * ratio), int(img_h * ratio)
+        
+        off_x = (canvas_w - new_w) // 2
+        off_y = (canvas_h - new_h) // 2
+        
+        # Canvas coordinates with offsets
+        tx1, ty1 = int(rx1 * ratio) + off_x, int(ry1 * ratio) + off_y
+        tx2, ty2 = int(rx2 * ratio) + off_x, int(ry2 * ratio) + off_y
         
         # Clear previous indicators
         self.canvas.delete("target_arrow")
         
-        # 1. Draw a big high-visibility dashed box around the area
-        # Outline with black first for contrast, then bright yellow
-        padding = 10
+        # 1. Draw a big high-visibility dashed box 
+        padding = 12
         self.canvas.create_rectangle(tx1-padding-2, ty1-padding-2, tx2+padding+2, ty2+padding+2, 
                                     outline="black", width=5, tags="target_arrow")
         self.canvas.create_rectangle(tx1-padding, ty1-padding, tx2+padding, ty2+padding, 
                                     outline="#FFFF00", width=3, dash=(8, 4), tags="target_arrow")
         
-        # 2. Draw a thick diagonal arrow pointing to the corner
-        # Starting from top-left offset
-        start_x, start_y = tx1 - 80, ty1 - 80
-        end_x, end_y = tx1 - 5, ty1 - 5
+        # 2. Draw a thick diagonal arrow (v1.5.1: Pointing from Right-Top to prevent Left Clipping)
+        # Starting from top-right offset, pointing down-left to the top-right corner
+        start_x, start_y = tx2 + 80, ty1 - 80
+        end_x, end_y = tx2 + 10, ty1 - 10
         
         # Shadow for arrow
         self.canvas.create_line(start_x+2, start_y+2, end_x+2, end_y+2, 
-                                arrow=LAST, fill="black", width=8, tags="target_arrow", arrowshape=(25, 30, 12))
-        # Main arrow
+                                arrow=LAST, fill="black", width=10, tags="target_arrow", arrowshape=(25, 30, 12))
+        # Main arrow (Bright Orange for visibility)
         self.canvas.create_line(start_x, start_y, end_x, end_y, 
-                                arrow=LAST, fill="#FF6600", width=6, tags="target_arrow", arrowshape=(25, 30, 12))
+                                arrow=LAST, fill="#FF6600", width=8, tags="target_arrow", arrowshape=(25, 30, 12))
         
-        # Label with shadow
+        # Label with shadow (Centered above the start of the arrow)
         self.canvas.create_text(start_x+2, start_y-18, text="FOCUS", fill="black", 
-                                font=("Helvetica", 16, "bold"), tags="target_arrow")
+                                font=("Helvetica", 18, "bold"), tags="target_arrow")
         self.canvas.create_text(start_x, start_y-20, text="FOCUS", fill="#FFFF00", 
-                                font=("Helvetica", 16, "bold"), tags="target_arrow")
+                                font=("Helvetica", 18, "bold"), tags="target_arrow")
 
     def hide_target_arrow(self):
         self.canvas.delete("target_arrow")
@@ -1676,8 +1755,9 @@ class SplicingGUI:
     def analysis_done(self):
         self.is_analyzing = False
         self.stop_event.set()
-        self.analyze_btn.config(state=NORMAL)
-        self.status_var.set("分析完成")
+        self.root.after(0, self.hide_target_arrow)
+        self.root.after(0, lambda: self.analyze_btn.config(state=NORMAL))
+        self.root.after(0, lambda: self.status_var.set("分析完成"))
 
     def export_results(self):
         if not self.results_data:
