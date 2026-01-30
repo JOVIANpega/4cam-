@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <title>動態拼接檢查系統 - 操作須知</title>
+    <style>
+        body {
+            font-family: "Microsoft JhengHei", Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 40px;
+            background-color: #f5f5f5;
+        }
+
+        .header {
+            text-align: center;
+            border-bottom: 2px solid #333;
+            padding-bottom: 20px;
+            margin-bottom: 40px;
+        }
+
+        .part-header {
+            background-color: #2c3e50;
+            color: white;
+            padding: 15px 25px;
+            margin: 40px 0 20px 0;
+            border-radius: 5px;
+        }
+
+        .section {
+            background: white;
+            padding: 30px;
+            margin-bottom: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 {
+            color: #2c3e50;
+        }
+
+        h2 {
+            color: #2c3e50;
+            border-left: 5px solid #2c3e50;
+            padding-left: 15px;
+            margin-top: 0;
+        }
+
+        .content {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .img-container {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        img {
+            max-width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        p {
+            margin: 10px 0;
+            font-size: 16px;
+            color: #555;
+        }
+
+        .tech-note {
+            background: #fdf9f3;
+            border: 1px solid #f3d19e;
+            padding: 15px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        ul {
+            padding-left: 20px;
+        }
+
+        li {
+            margin-bottom: 8px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <h1>動態拼接檢查系統 (Dynamic Splicing Check System)</h1>
+        <p>系統操作與功能技術說明文件</p>
+    </div>
+
+    <!-- PART 1 -->
+    <div class="part-header">
+        <h1>第一部分：介面功能與參數設定</h1>
+    </div>
+
+    <!-- 原步驟 2 -->
+    <div class="section">
+        <h2>🎮 控制面板功能詳解</h2>
+        <div class="content">
+            <div class="img-container">
+                <img src="pic/2026-01-30 15_30_06-動態拼接檢查系統 (Dynamic Splicing Check System) - V1.3.0.jpg" alt="控制面板">
+            </div>
+            <p>位於介面左側的控制面板包含核心操作按鈕：</p>
+            <ul>
+                <li><strong>單張照片/載入資料夾/載入壓縮檔</strong>：用於選取不同來源的影像數據。</li>
+                <li><strong>開始分析</strong>：啟動檢測流程。</li>
+                <li><strong>複製/清空</strong>：管理分析紀錄及重置系統至初始狀態。</li>
+                <li><strong>數據統計</strong>：快速跳轉至良率看板。</li>
+            </ul>
+        </div>
+    </div>
+
+    <!-- 原步驟 9 -->
+    <div class="section">
+        <h2>🛠️ 參數微調與個人化</h2>
+        <div class="content">
+            <div class="img-container">
+                <img src="pic/2026-01-30 15_32_36-動態拼接檢查系統 (Dynamic Splicing Check System) - V1.3.0.jpg" alt="參數設定">
+            </div>
+            <p>在設定分頁中，用戶可調整字體大小、放大鏡倍率、差異/比率閾值等核心參數。所有改動將即時生效。若參數偏移過大，可使用「恢復預設參數」重置。</p>
+        </div>
+    </div>
+
+    <!-- PART 2 -->
+    <div class="part-header">
+        <h1>第二部分：操作流程引導</h1>
+    </div>
+
+    <!-- 原步驟 1 -->
+    <div class="section">
+        <h2>🚀 步驟 1：系統啟動與初始化</h2>
+        <div class="content">
+            <div class="img-container">
+                <img src="pic/2026-01-30 16_30_41-4cam_stripe_checker_v2 - Antigravity - README.md.jpg" alt="系統啟動">
+            </div>
+            <p>程式啟動後，系統會自動加載預設運算門檻（邊界感應 Diff=18, 鬼影比率 Rate=0.18, 合格門檻
+                Fail=4px）。在載入影像前，中央顯示區與數據總覽頁面將維持初始化空白狀態。用戶可透過左下方的日誌視窗確認系統是否顯示「就緒」字樣，以確保核心檢測引擎已正確啟動。</p>
+        </div>
+    </div>
+
+    <!-- 原步驟 3 -->
+    <div class="section">
+        <h2>📂 步驟 2：選擇影像來源</h2>
+        <div class="content">
+            <div class="img-container">
+                <img src="pic/2026-01-30 15_30_58-開啟.jpg" alt="選擇影像">
+            </div>
+            <p>透過檔案瀏覽器選取測試影像。系統支援多選及壓縮檔直接讀取。若已設定關鍵字篩選，載入過程中會自動排除不符合名稱規範的檔案。</p>
+        </div>
+    </div>
+
+    <!-- 原步驟 4 -->
+    <div class="section">
+        <h2>📊 步驟 3：分析進度與日誌回饋</h2>
+        <div class="content">
+            <div class="img-container">
+                <img src="pic/2026-01-30 15_31_21-動態拼接檢查系統 (Dynamic Splicing Check System) - V1.3.0.jpg" alt="日誌回饋">
+            </div>
+            <p>分析運行期間，左側日誌區將實時更新各目標（Target 0-2）的位移數值與判定結果。綠色文字代表通過(PASS)，紅色代表不合格(FAIL)，所有過程數據皆會被儲存至歷史快照中。</p>
+        </div>
+    </div>
+
+    <!-- 原步驟 5 -->
+    <div class="section">
+        <h2>🖼️ 步驟 4：判讀主畫面結果</h2>
+        <div class="content">
+            <div class="img-container">
+                <img src="pic/2026-01-30 15_31_34-動態拼接檢查系統 (Dynamic Splicing Check System) - V1.3.0.jpg" alt="主畫面結果">
+            </div>
+            <p>分析完成後，主畫面上方將顯示大尺寸 PASS/FAIL 水印。畫面中央顯示檔名，下方則是自動對齊並截取的拼接處特寫（Snapshots），提供直接的視覺判定依據。</p>
+        </div>
+    </div>
+
+    <!-- 原步驟 6+7 -->
+    <div class="section">
+        <h2>🔍 步驟 5：細節檢查與懸停放大</h2>
+        <div class="content">
+            <div class="img-container">
+                <img src="pic/2026-01-30 15_31_50-動態拼接檢查系統 (Dynamic Splicing Check System) - V1.3.0.jpg" alt="局部放大">
+            </div>
+            <p>滑鼠滑過下方截圖時，系統會自動彈出高倍率放大鏡。您可以清晰觀察到條紋是否存在重影或斷裂現象。</p>
+            <div class="img-container">
+                <img src="pic/2026-01-30 15_32_07-動態拼接檢查系統 (Dynamic Splicing Check System) - V1.3.0.jpg" alt="滑鼠互動">
+            </div>
+        </div>
+    </div>
+
+    <!-- 原步驟 8 -->
+    <div class="section">
+        <h2>📈 步驟 6：數據總覽與批次管理 (Dashboard)</h2>
+        <div class="content">
+            <div class="img-container">
+                <img src="pic/doc_workflow.png" alt="生產線工作流">
+            </div>
+            <p><strong>如何快速檢查一整天的圖片？</strong></p>
+            <ul>
+                <li><strong>一批次全掃描</strong>：載入存放照片的資料夾，系統會自動排程分析所有圖片。</li>
+                <li><strong>看板一眼看穿良率</strong>：實時顯示今天有多少百分比產量是合格的。</li>
+                <li><strong>抓出 NG 品</strong>：底部會列出所有不合格檔案，點一下就能直接跳轉複查。</li>
+            </ul>
+            <div class="img-container">
+                <img src="pic/2026-01-30 16_33_56-動態拼接檢查系統 (Dynamic Splicing Check System) - V1.3.0.jpg" alt="數據總覽">
+            </div>
+        </div>
+    </div>
+
+    <!-- PART 3 -->
+    <div class="part-header">
+        <h1>第三部分：專業技術名詞解釋</h1>
+    </div>
+
+    <!-- 原步驟 10 -->
+    <div class="section">
+        <h2>🌐 鏡頭畸變 (Lens Distortion)</h2>
+        <div class="content">
+            <div class="img-container">
+                <img src="pic/doc_distortion.png" alt="畸變簡單說明">
+            </div>
+            <p><strong>就像哈哈鏡一樣：</strong> 鏡頭會讓直線變彎（如上圖）。系統會自動「看懂」並「拉直」這些曲線，確保位移計算是準確的，不會冤枉合格的產品。</p>
+        </div>
+    </div>
+
+    <!-- 原步驟 11 -->
+    <div class="section">
+        <h2>🧬 參數尋優 (Tuning Logic)</h2>
+        <div class="content">
+            <div class="img-container">
+                <img src="pic/manual_3.png" alt="專家調校">
+            </div>
+            <p><strong>就像登山找谷底：</strong> 程式在嘗試找到「讓誤差最小」的那個點。學習率決定步幅，動能決定遇到雜訊時的穩定度。預設值已是針對產線優化過的最佳狀態。</p>
+        </div>
+    </div>
+
+    <!-- 原步驟 12 -->
+    <div class="section">
+        <h2>🔬 拼接核心原理 (Physics)</h2>
+        <div class="content">
+            <div class="img-container">
+                <img src="pic/doc_alignment.png" alt="對齊原理簡單說明">
+            </div>
+            <div class="tech-note">
+                <p><strong>為什麼會出現 FAIL？</strong> 就像玩積木對齊：</p>
+                <ul>
+                    <li><strong>🟢 PASS</strong>：兩邊完美對準，成一直線。</li>
+                    <li><strong>🔴 FAIL</strong>：積木滑開了 (位移)、看到重疊影子 (重影)、或彩色疊合失敗 (色散)。</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+</body>
+
+</html>

@@ -17,6 +17,7 @@ import zipfile
 import py7zr
 import tempfile
 import shutil
+from ttkbootstrap.scrolled import ScrolledFrame
 
 VERSION = "1.3.0"
 
@@ -97,6 +98,8 @@ class SplicingGUI:
         self.hide_result_permanently = False # v1.2.9+: Persistent hide after first hover
         self.zip_filter_var = tk.StringVar(value="4cam_cam")
         self.temp_extract_dir = None # For ZIP extraction
+        self.file_source_map = {} # v1.7.5: Map filepath -> source name (folder or zip)
+        self._hover_timer = None # v1.7.5: Timer for grid hover delay
         
         self.load_config()
         self.setup_ui()
@@ -166,18 +169,18 @@ class SplicingGUI:
         self.font_widgets_buttons.append(self.clear_log_btn)
         ToolTip(self.clear_log_btn, text="清除目前日誌")
         
-        # 7th Placeholder Button (Reserved)
-        self.reserved_btn = ttk.Button(row2, text="➕ 預留槽", bootstyle=LIGHT, state=DISABLED)
-        self.reserved_btn.pack(side=LEFT, fill=X, expand=YES, padx=1, pady=2)
-        self.font_widgets_buttons.append(self.reserved_btn)
-        ToolTip(self.reserved_btn, text="未來功能擴充位置")
+        # v1.8.0: Enable Stats Dashboard Button
+        self.stat_btn = ttk.Button(row2, text="📊 數據統計", bootstyle=INFO, command=lambda: self.notebook.select(3), cursor="hand2")
+        self.stat_btn.pack(side=LEFT, fill=X, expand=YES, padx=1, pady=2)
+        self.font_widgets_buttons.append(self.stat_btn)
+        ToolTip(self.stat_btn, text="查看批次分析數據總覽與良率統計")
         
         ttk.Separator(self.left_panel, orient=HORIZONTAL).pack(fill=X, pady=10)
         
-        # Log Area - Expanded (v1.1.7)
+        # Log Area - Restored to left_panel
         self.log_area = ttk.ScrolledText(self.left_panel, width=30, font=("Microsoft JhengHei", 10))
         self.log_area.pack(fill=BOTH, expand=YES, pady=5)
-        # Setup tags for coloring PASS/FAIL results (Microsoft JhengHei)
+        
         self.log_area.tag_config("pass_text", foreground="#00FF00", font=("Microsoft JhengHei", 10, "bold"))
         self.log_area.tag_config("fail_text", foreground="#FF0000", font=("Microsoft JhengHei", 10, "bold"))
         self.log_area.tag_config("blue_text", foreground="#00BFFF", font=("Microsoft JhengHei", 10, "bold"))
@@ -265,56 +268,39 @@ class SplicingGUI:
         self.settings_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.settings_tab, text=" [ 參數設定 (Settings) ] ")
         
-        # --- TAB 3: Help / Documentation ---
-        self.help_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.help_tab, text=" [ 邏輯說明 (Manual) ] ")
+        # --- TAB 5: Dashboard (v1.8.3: Restored to Right Panel) ---
+        self.dashboard_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.dashboard_tab, text=" [ 數據總覽 (Dashboard) ] ")
         
-        help_text_tab = ttk.ScrolledText(self.help_tab, font=("Microsoft JhengHei", 12))
-        help_text_tab.pack(fill=BOTH, expand=YES, padx=20, pady=20)
-        self.manual_text_widget = help_text_tab # Store for font update
+        dash_scroll = ScrolledFrame(self.dashboard_tab, autohide=True)
+        dash_scroll.pack(fill=BOTH, expand=YES)
+        self.dash_content = dash_scroll
+        
+        self.dash_summary_frame = ttk.Frame(self.dash_content.container, padding=20)
+        self.dash_summary_frame.pack(fill=X)
+        self.dash_detail_frame = ttk.Frame(self.dash_content.container, padding=20)
+        self.dash_detail_frame.pack(fill=BOTH, expand=YES)
+        self.update_dashboard_empty()
 
-        manual_content = """
-■ 系統核心設計說明 (System Core Design)
+        # --- TAB 6: User Manual (v2.3.0: Moved to Rightmost, HTML Based) ---
+        self.help_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.help_tab, text=" [ 操作須知 (Guide) ] ")
+        
+        guide_frame = ttk.Frame(self.help_tab, padding=50)
+        guide_frame.pack(fill=BOTH, expand=YES)
+        
+        ttk.Label(guide_frame, text="📖 系統操作維護手冊", font=("Helvetica", 24, "bold"), bootstyle=PRIMARY).pack(pady=(50, 20))
+        ttk.Label(guide_frame, text="點擊下方按鈕以瀏覽詳細的圖文操作說明 (HTML 格式)。", font=("Microsoft JhengHei", 14)).pack(pady=10)
+        
+        btn_open_manual = ttk.Button(guide_frame, text="🌐 開啟完整操作手冊", 
+                                    bootstyle=INFO, 
+                                    command=self.open_html_manual, cursor="hand2", width=30)
+        btn_open_manual.pack(pady=40)
+        self.font_widgets_buttons.append(btn_open_manual)
+        
 
-本系統專為「四線條紋圖」(4-line stripe pattern) 進行精密的幾何與色彩一致性檢查而設計。
+        self.update_dashboard_empty()
 
-1. 檢查原理 - 為什麼是四線條紋？
---------------------------------------------
-系統透過尋找標靶中的 紅(R)、綠(G)、藍(B) 及 白色(White/Gray) 條紋邊界來判讀拼接品質。
-- 分段偵測：將條紋分為三組（紅綠、綠藍、藍白拼接處）獨立計算像素位移 (Pixel Shift)。
-- 參數鎖定：系統內置了針對 100cm 測試距離設計的特定參數 (如 hlimit, Pitch)，以確保高精度。
-
-2. 歪曲檢查 (Distortion) 的侷限性
---------------------------------------------
-本系統為「拼接處對齊檢查員」，而非全圖「鏡頭畸變測試儀」。
-- 能檢測到：若歪曲發生在四線標靶所在的局部區域，導致條紋斷裂、傾斜或錯位，系統會報 FAIL。
-- 檢測不到：若歪曲發生在沒有標靶的區域（如全圖中間或邊緣偏置），即使有幾何變形，只要拼接點有對齊，系統仍可能判定為 PASS。
-
-3. 常見狀態說明
---------------------------------------------
-- ROI_SELECTOR_ERROR：代表系統找不到紅色標記點，可能是圖片太暗、位置偏移過大或完全沒拍到標靶。
-- Pixel Shift 數值過大：若偵測到條紋邊緣不再垂直或有嚴重重影，Pixel Shift 會飆高，進而判定為 NG。
-
-■ 核心參數說明 (Algorithm Parameters)
-
-1. 差異閾值 (Diff Threshold)
---------------------------------------------
-用於判定邊緣強度的門檻。數值愈小愈靈敏（易受雜訊干擾），數值愈大愈遲鈍。建議值：18。
-
-2. 比率閾值 (Rate Threshold)
---------------------------------------------
-用於判定「鬼影/重影」。分析主次波峰的比率，若重影超過此比例則計入位移。建議值：0.18。
-
-3. 不合格判定值 (Fail Threshold px)
---------------------------------------------
-判定為 FAIL 的臨界點。Pixel Shift >= 此值即顯示為紅色(NG)。建議值：4 px。
-
-4. 定位邏輯 (Find_Center_ROI)
---------------------------------------------
-利用「RGB 色彩過濾」鎖定紅色標記點，作為後續掃描條紋的基準座標。
-        """
-        help_text_tab.insert(END, manual_content)
-        help_text_tab.config(state=DISABLED) # Make read-only
         
         # Parameters Container in Settings Tab
         settings_container = ttk.Frame(self.settings_tab, padding=30)
@@ -636,7 +622,7 @@ class SplicingGUI:
         # Ensure the styling stays even when clicked
         self.style.map("TNotebook.Tab",
                       padding=[("selected", "50 25"), ("active", "50 25")],
-                      background=[("active", "#4d4d4d"), ("selected", "#323232")]) # Add hover background
+                      background=[("active", "#6f42c1"), ("selected", "#502ba0")]) # Premium Purple handover
         
         self.style.configure("TLabelframe.Label", font=("Helvetica", size, "bold"))
         
@@ -677,20 +663,27 @@ class SplicingGUI:
                 btn.configure(font=("Helvetica", size))
             except: pass
             
-        # Update Manual tab font (Microsoft JhengHei)
-        if hasattr(self, 'manual_text_widget'):
-            self.manual_text_widget.configure(font=("Microsoft JhengHei", size))
+        # Update Manual tab font (Microsoft JhengHei) - Deprecated in v2.3.0 as using HTML
+        pass
             
         # Update Status Bar
         if hasattr(self, 'status_bar'):
             self.status_bar.configure(font=("Helvetica", size))
             
-        # Update Log font (Microsoft JhengHei)
-        if hasattr(self, 'log_area'):
-            self.log_area.configure(font=("Microsoft JhengHei", size))
-            self.log_area.tag_config("pass_text", font=("Microsoft JhengHei", size, "bold"))
-            self.log_area.tag_config("fail_text", font=("Microsoft JhengHei", size, "bold"))
-            self.log_area.tag_config("blue_text", font=("Microsoft JhengHei", size, "bold"))
+        self.log_area.tag_config("blue_text", font=("Microsoft JhengHei", size, "bold"))
+        
+        # v1.8.5: Refresh Dashboard if it exists
+        if hasattr(self, 'dash_summary_frame'):
+            self.update_dashboard()
+
+    def open_html_manual(self):
+        """v2.3.0: Open external HTML manual in default browser"""
+        manual_path = os.path.abspath("MANUAL.html")
+        if os.path.exists(manual_path):
+            import webbrowser
+            webbrowser.open(f"file://{manual_path}")
+        else:
+            tk.messagebox.showerror("錯誤", "找不到 MANUAL.html 文件，請確認檔案是否存在於程式目錄。")
 
     def update_labels(self):
         self.diff_label.config(text=f"{int(self.diff_thd_var.get())}")
@@ -720,7 +713,34 @@ class SplicingGUI:
             tk.messagebox.showerror("錯誤", f"無法更新版本號文件: {str(e)}")
 
     def clear_log(self):
+        """Full System Reset (v1.8.7): Restore GUI to 'just opened' state"""
+        # 1. Clear Data States
         self.log_area.delete('1.0', END)
+        self.batch_files = []
+        self.batch_index = 0
+        self.current_image_path = None
+        self.analysis_history = {}
+        self.file_source_map = {}
+        self.results_data = [] # Clear CSV data
+        
+        # 2. Reset UI Labels
+        self.source_label.config(text="[ 未載入 ]")
+        self.status_var.set("就緒")
+        self.nav_label.config(text="0 / 0")
+        
+        # 3. Clear Visual Components
+        self.canvas.delete("all")      # Clear Image
+        self.clear_previews()          # Clear Snapshots
+        self.bookmark_canvas.delete("all") # Clear Grid
+        self.update_dashboard_empty() # Reset Statistics
+        
+        # 4. Clean temp refs
+        if self.temp_extract_dir and os.path.exists(self.temp_extract_dir):
+            try: shutil.rmtree(self.temp_extract_dir)
+            except: pass
+        self.temp_extract_dir = None
+        
+        self.log("系統已全面清空並恢復初始化狀態。")
 
     def copy_log(self):
         try:
@@ -789,6 +809,7 @@ class SplicingGUI:
         if not self.temp_extract_dir:
             self.temp_extract_dir = tempfile.mkdtemp(prefix="splicing_tool_")
         
+        self.file_source_map = {} # v1.7.5 Reset mapping
         extracted_files = []
         exts = ('.jpg', '.jpeg', '.png', '.bmp')
         
@@ -816,6 +837,7 @@ class SplicingGUI:
                                     with z.open(f_in_zip) as source, open(target_path, "wb") as target:
                                         shutil.copyfileobj(source, target)
                                     extracted_files.append(target_path)
+                                    self.file_source_map[target_path] = a_name
                                     
                 elif ext == '.7z':
                     with py7zr.SevenZipFile(ap, mode='r') as z:
@@ -845,6 +867,7 @@ class SplicingGUI:
                                             dst_path = self._get_unique_temp_path(f)
                                             shutil.move(src_path, dst_path)
                                             extracted_files.append(dst_path)
+                                            self.file_source_map[dst_path] = a_name
                             
                             # 4. Clean up sub-root
                             try: shutil.rmtree(sub_root)
@@ -902,10 +925,16 @@ class SplicingGUI:
             self.log(f"正在掃描資料夾: {folder} (共找到 {all_files_cnt} 個檔案)")
             
             keyword = self.zip_filter_var.get().strip().lower()
+            self.file_source_map = {} # v1.7.5 Reset mapping
             if keyword:
                 self.batch_files = [os.path.join(folder, f) for f in all_imgs if keyword in f.lower()]
             else:
                 self.batch_files = [os.path.join(folder, f) for f in all_imgs]
+            
+            # Populate mapping for folder mode
+            folder_name = os.path.basename(folder)
+            for path in self.batch_files:
+                self.file_source_map[path] = folder_name
 
             if self.batch_files:
                 self.analysis_history = {}
@@ -1098,7 +1127,8 @@ class SplicingGUI:
                             f_nav = ImageFont.load_default()
 
                         fname = os.path.basename(path)
-                        source_raw = self.source_label.cget("text")
+                        # v1.7.5: Use dynamic mapping to show exact ZIP/Folder name
+                        source_raw = self.file_source_map.get(path, self.source_label.cget("text"))
                         nav_text = f"{self.batch_index + 1} / {len(self.batch_files)}"
                         
                         # Decide if we show source/index
@@ -1553,8 +1583,8 @@ class SplicingGUI:
             
             # Interaction Bindings
             self.bookmark_canvas.tag_bind(tag_name, "<Button-1>", lambda e, idx=i: self.jump_to_image(idx))
-            self.bookmark_canvas.tag_bind(tag_name, "<Enter>", lambda e, idx=i: [self.bookmark_hover_enter(idx), self.bookmark_canvas.config(cursor="hand2")])
-            self.bookmark_canvas.tag_bind(tag_name, "<Leave>", lambda e: self.bookmark_canvas.config(cursor=""))
+            self.bookmark_canvas.tag_bind(tag_name, "<Enter>", lambda e, idx=i: self.bookmark_hover_enter(idx))
+            self.bookmark_canvas.tag_bind(tag_name, "<Leave>", lambda e: self.on_bookmark_leave())
         
         # Dynamic Scroll Region
         self.bookmark_canvas.config(scrollregion=self.bookmark_canvas.bbox("all"))
@@ -1562,9 +1592,18 @@ class SplicingGUI:
     def bookmark_hover_enter(self, index):
         """Handle mouse hover over bookmark squares (v1.2.2)"""
         self.bookmark_canvas.config(cursor="hand2")
-        # Only switch if not currently analyzing and the target is different from current
+        # v1.7.5: Implement 0.5s delay before switching to prevent rapid flickering
         if not self.is_analyzing and index != self.batch_index:
-            self.jump_to_image(index)
+            if self._hover_timer:
+                self.root.after_cancel(self._hover_timer)
+            self._hover_timer = self.root.after(500, lambda: self.jump_to_image(index))
+
+    def on_bookmark_leave(self):
+        """Cancel the pending jump if mouse leaves before delay"""
+        self.bookmark_canvas.config(cursor="")
+        if self._hover_timer:
+            self.root.after_cancel(self._hover_timer)
+            self._hover_timer = None
 
     def prev_image(self):
         if self.is_analyzing or not self.batch_files: return
@@ -1648,7 +1687,7 @@ class SplicingGUI:
                 lbl_index = ttk.Label(info_frame, text=f"目標 T{index}", font=("Helvetica", 16, "bold"))
                 lbl_index.pack(anchor=W)
                 
-                lbl_shift_x = ttk.Label(info_frame, text=f"位移: {shift}px", font=("Helvetica", 9))
+                lbl_shift_x = ttk.Label(info_frame, text=f"位移: {shift}px", font=("Helvetica", 12))
                 lbl_shift_x.pack(anchor=W)
                 
                 # Keep references to prevent GC
@@ -1773,6 +1812,127 @@ class SplicingGUI:
         self.root.after(0, self.hide_target_arrow)
         self.root.after(0, lambda: self.analyze_btn.config(state=NORMAL))
         self.root.after(0, lambda: self.status_var.set("分析完成"))
+        self.root.after(0, self.update_dashboard) # v1.8.0
+
+    def update_dashboard_empty(self):
+        size = self.gui_font_size_var.get()
+        for w in self.dash_summary_frame.winfo_children(): w.destroy()
+        for w in self.dash_detail_frame.winfo_children(): w.destroy()
+        ttk.Label(self.dash_summary_frame, text="📊 尚無分析數據", font=("Helvetica", int(size*1.6), "bold")).pack(pady=50)
+        ttk.Label(self.dash_summary_frame, text="請先執行「開始分析」以產生統計資料。", font=("Microsoft JhengHei", size)).pack()
+
+    def update_dashboard(self):
+        """v1.8.0: Generate high-level batch analytics"""
+        size = self.gui_font_size_var.get()
+        if len(self.batch_files) <= 1:
+            self.update_dashboard_empty()
+            return
+            
+        # Clear existing
+        for w in self.dash_summary_frame.winfo_children(): w.destroy()
+        for w in self.dash_detail_frame.winfo_children(): w.destroy()
+        
+        # 1. Statistics Calculation
+        total = len(self.batch_files)
+        analyzed = len(self.analysis_history)
+        pass_cnt = sum(1 for h in self.analysis_history.values() if h.get('is_pass'))
+        fail_cnt = analyzed - pass_cnt
+        yield_rate = (pass_cnt / analyzed * 100) if analyzed > 0 else 0
+        
+        # 2. Render Summary Cards
+        card_container = ttk.Frame(self.dash_summary_frame)
+        card_container.pack(fill=X)
+        
+        def create_card(parent, title, value, color):
+            f = ttk.Frame(parent, bootstyle=color, padding=2, borderwidth=1, relief="solid")
+            f.pack(side=LEFT, expand=YES, fill=BOTH, padx=10)
+            inner = ttk.Frame(f, padding=20)
+            inner.pack(fill=BOTH, expand=YES)
+            ttk.Label(inner, text=title, font=("Helvetica", size)).pack()
+            ttk.Label(inner, text=value, font=("Helvetica", int(size*2.2), "bold"), bootstyle=color).pack()
+            return f
+
+        create_card(card_container, "總影像數", str(total), SECONDARY)
+        create_card(card_container, "已分析", str(analyzed), INFO)
+        create_card(card_container, "通過 (PASS)", str(pass_cnt), SUCCESS)
+        create_card(card_container, "不合格 (FAIL)", str(fail_cnt), DANGER)
+        create_card(card_container, "良率 (Yield)", f"{yield_rate:.1f}%", WARNING if yield_rate < 95 else SUCCESS)
+
+        # 3. Distribution Analysis (Which T fails most?)
+        target_fail_map = {}
+        fail_files = []
+        for path, hist in self.analysis_history.items():
+            if not hist.get('is_pass'):
+                fail_files.append(path)
+                for snap in hist.get('snapshots', []):
+                    if snap['status'] == 'fail':
+                        idx = snap['index']
+                        target_fail_map[idx] = target_fail_map.get(idx, 0) + 1
+        
+        # 4. Render Distribution (Heatmap style)
+        ttk.Label(self.dash_detail_frame, text="🎯 目標失敗頻率 (Failure Frequency per Target):", 
+                  font=("Helvetica", size + 2, "bold")).pack(anchor=W, pady=(20, 10))
+        
+        dist_box = ttk.Frame(self.dash_detail_frame)
+        dist_box.pack(fill=X)
+        if not target_fail_map:
+            ttk.Label(dist_box, text="（目前無失敗目標）", foreground="gray", font=("Helvetica", size)).pack(anchor=W)
+        else:
+            sorted_targets = sorted(target_fail_map.items(), key=lambda x: x[0])
+            for idx, count in sorted_targets:
+                item = ttk.Frame(dist_box, padding=5)
+                item.pack(side=LEFT, padx=5)
+                # Small circle/box with count
+                lbl = ttk.Label(item, text=f"T{idx}", font=("Helvetica", size, "bold"), bootstyle=DANGER, width=5, anchor=CENTER)
+                lbl.pack()
+                ttk.Label(item, text=f"{count} 次", font=("Helvetica", size - 2)).pack()
+
+        # 5. NG Quick-Jump Gallery (Thumbnail list of failures)
+        ttk.Label(self.dash_detail_frame, text=f"🚨 不合格清單 ({len(fail_files)}):", 
+                  font=("Helvetica", size + 2, "bold")).pack(anchor=W, pady=(30, 10))
+        
+        gallery_outer = ttk.Frame(self.dash_detail_frame)
+        gallery_outer.pack(fill=X)
+        
+        if not fail_files:
+            ttk.Label(gallery_outer, text="（目前無不合格項目，恭喜！）", bootstyle=SUCCESS, font=("Helvetica", size)).pack(anchor=W)
+        else:
+            gal_scroll = ttk.Scrollbar(gallery_outer, orient=HORIZONTAL)
+            gal_scroll.pack(side=BOTTOM, fill=X)
+            
+            gal_canvas = tk.Canvas(gallery_outer, height=150 + (size-12)*3, bg="#1a1a1a", highlightthickness=0, xscrollcommand=gal_scroll.set)
+            gal_canvas.pack(fill=X)
+            gal_inner = ttk.Frame(gal_canvas)
+            gal_canvas.create_window((0,0), window=gal_inner, anchor=NW)
+            gal_scroll.config(command=gal_canvas.xview)
+            
+            def jump_from_dash(p):
+                idx = self.batch_files.index(p)
+                self.jump_to_image(idx)
+                self.notebook.select(0)
+
+            for p in fail_files[:50]: # Limit for performance
+                f_name = os.path.basename(p)
+                src_name = self.file_source_map.get(p, "未知來源")
+                
+                f_box = ttk.Frame(gal_inner, padding=5, cursor="hand2")
+                f_box.pack(side=LEFT, padx=10)
+                
+                # v1.8.6: Show Source + Filename with enlarged font
+                lbl_src = ttk.Label(f_box, text=f"📦 {src_name}", font=("Helvetica", size - 2), foreground="#AAAAAA")
+                lbl_src.pack()
+                
+                lbl_name = ttk.Label(f_box, text=f_name[:25], font=("Helvetica", size, "bold"), bootstyle=DANGER)
+                lbl_name.pack()
+                
+                # Button to Go
+                btn_go = ttk.Button(f_box, text="🔍 檢視", bootstyle=(DANGER, OUTLINE), 
+                                   command=lambda path=p: jump_from_dash(path), cursor="hand2")
+                btn_go.pack(pady=5)
+                self.font_widgets_buttons.append(btn_go)
+                
+            gal_inner.update_idletasks()
+            gal_canvas.config(scrollregion=gal_canvas.bbox("all"))
 
     def export_results(self):
         if not self.results_data:
