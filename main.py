@@ -18,7 +18,7 @@ import py7zr
 import tempfile
 import shutil
 
-VERSION = "1.2.5"
+VERSION = "1.3.0"
 
 class SplicingGUI:
     def __init__(self, root):
@@ -124,46 +124,53 @@ class SplicingGUI:
         
         ttk.Label(self.left_panel, text="控制面板 (Control Panel)", font=("Helvetica", 16, "bold")).pack(pady=10)
         
-        # Center Frame for Buttons (Prevents stretching)
+        # Center Frame for Buttons (Bookmark-style Grid)
         btn_container = ttk.Frame(self.left_panel)
-        btn_container.pack(pady=10)
+        btn_container.pack(fill=X, pady=10)
         
-        # Define a consistent width for all buttons
-        BTN_WIDTH = 25
+        # Row 1: Load Actions (3 columns)
+        row1 = ttk.Frame(btn_container)
+        row1.pack(fill=X)
         
-        btn_load_single = ttk.Button(btn_container, text="📂 載入單張照片", bootstyle=PRIMARY, command=self.load_image)
-        btn_load_single.pack(fill=X, pady=5)
+        btn_load_single = ttk.Button(row1, text="📂 單張照片", bootstyle=PRIMARY, command=self.load_image, cursor="hand2")
+        btn_load_single.pack(side=LEFT, fill=X, expand=YES, padx=1, pady=2)
         self.font_widgets_buttons.append(btn_load_single)
         ToolTip(btn_load_single, text="選擇單個圖片檔案進行分析")
         
-        btn_load_folder = ttk.Button(btn_container, text="📁 載入資料夾", bootstyle=SECONDARY, command=self.load_folder)
-        btn_load_folder.pack(fill=X, pady=5)
+        btn_load_folder = ttk.Button(row1, text="📁 載入資料夾", bootstyle=SECONDARY, command=self.load_folder, cursor="hand2")
+        btn_load_folder.pack(side=LEFT, fill=X, expand=YES, padx=1, pady=2)
         self.font_widgets_buttons.append(btn_load_folder)
         ToolTip(btn_load_folder, text="選擇一個資料夾進行批次分析")
-
-        btn_load_zip = ttk.Button(btn_container, text="📦 載入壓縮檔 (ZIP/7z)", bootstyle=WARNING, command=self.load_zip)
-        btn_load_zip.pack(fill=X, pady=5)
+        
+        btn_load_zip = ttk.Button(row1, text="📦 載入壓縮檔", bootstyle=WARNING, command=self.load_zip, cursor="hand2")
+        btn_load_zip.pack(side=LEFT, fill=X, expand=YES, padx=1, pady=2)
         self.font_widgets_buttons.append(btn_load_zip)
-        ToolTip(btn_load_zip, text="選擇 ZIP 或 7z 檔案並篩選關鍵字進行分析")
+        ToolTip(btn_load_zip, text="選擇 ZIP/7z 檔案進行分析")
         
-        self.analyze_btn = ttk.Button(btn_container, text="🚀 開始分析", bootstyle=SUCCESS, command=self.start_analysis)
-        self.analyze_btn.pack(fill=X, pady=15)
+        # Row 2: Control & Utils (4 columns)
+        row2 = ttk.Frame(btn_container)
+        row2.pack(fill=X)
+        
+        self.analyze_btn = ttk.Button(row2, text="🚀 開始分析", bootstyle=SUCCESS, command=self.start_analysis, cursor="hand2")
+        self.analyze_btn.pack(side=LEFT, fill=X, expand=YES, padx=1, pady=2)
         self.font_widgets_buttons.append(self.analyze_btn)
-        ToolTip(self.analyze_btn, text="開始執行拼接分析流程")
+        ToolTip(self.analyze_btn, text="啟動自動化檢測流程")
         
-        # Log Control Buttons (Horizontal row)
-        log_btn_frame = ttk.Frame(btn_container)
-        log_btn_frame.pack(fill=X, pady=5)
-        
-        self.copy_log_btn = ttk.Button(log_btn_frame, text="📋 複製日誌", bootstyle=INFO, command=self.copy_log)
-        self.copy_log_btn.pack(side=LEFT, fill=X, expand=YES, padx=2)
+        self.copy_log_btn = ttk.Button(row2, text="📋 複製", bootstyle=INFO, command=self.copy_log, cursor="hand2")
+        self.copy_log_btn.pack(side=LEFT, fill=X, expand=YES, padx=1, pady=2)
         self.font_widgets_buttons.append(self.copy_log_btn)
-        ToolTip(self.copy_log_btn, text="將日誌內容複製到剪貼簿")
+        ToolTip(self.copy_log_btn, text="複製日誌文字")
         
-        self.clear_log_btn = ttk.Button(log_btn_frame, text="🗑️ 清空日誌", bootstyle=DANGER, command=self.clear_log)
-        self.clear_log_btn.pack(side=RIGHT, fill=X, expand=YES, padx=2)
+        self.clear_log_btn = ttk.Button(row2, text="🗑️ 清空", bootstyle=DANGER, command=self.clear_log, cursor="hand2")
+        self.clear_log_btn.pack(side=LEFT, fill=X, expand=YES, padx=1, pady=2)
         self.font_widgets_buttons.append(self.clear_log_btn)
-        ToolTip(self.clear_log_btn, text="清除所有日誌文字")
+        ToolTip(self.clear_log_btn, text="清除目前日誌")
+        
+        # 7th Placeholder Button (Reserved)
+        self.reserved_btn = ttk.Button(row2, text="➕ 預留槽", bootstyle=LIGHT, state=DISABLED)
+        self.reserved_btn.pack(side=LEFT, fill=X, expand=YES, padx=1, pady=2)
+        self.font_widgets_buttons.append(self.reserved_btn)
+        ToolTip(self.reserved_btn, text="未來功能擴充位置")
         
         ttk.Separator(self.left_panel, orient=HORIZONTAL).pack(fill=X, pady=10)
         
@@ -179,8 +186,8 @@ class SplicingGUI:
         self.right_panel = ttk.Frame(self.paned)
         self.paned.add(self.right_panel, weight=4)
         
-        # Use a Custom Styled Notebook (v1.2.1: Premium UI)
-        self.notebook = ttk.Notebook(self.right_panel, style="Custom.TNotebook")
+        # Revert to standard notebook to restore theme inheritance
+        self.notebook = ttk.Notebook(self.right_panel, cursor="hand2")
         self.notebook.pack(fill=BOTH, expand=YES, padx=5, pady=5)
 
         # Restore Sash Position (v1.2.0)
@@ -620,10 +627,17 @@ class SplicingGUI:
         size = self.gui_font_size_var.get()
         self.font_size_label.config(text=str(size))
         
-        # Update Global Styles
-        self.style.configure(".", font=("Helvetica", size))
-        # v1.2.6: Add generous padding to tabs to prevent them from sticking together
-        self.style.configure("TNotebook.Tab", font=("Helvetica", size, "bold"), padding=[30, 10])
+        # v1.7.1: Apply to global TNotebook.Tab class for maximum compatibility
+        # Using string format "50 25" which is most stable in Tcl
+        self.style.configure("TNotebook.Tab", 
+                            font=("Helvetica", size, "bold"), 
+                            padding="50 25")
+        
+        # Ensure the styling stays even when clicked
+        self.style.map("TNotebook.Tab",
+                      padding=[("selected", "50 25"), ("active", "50 25")],
+                      background=[("active", "#4d4d4d"), ("selected", "#323232")]) # Add hover background
+        
         self.style.configure("TLabelframe.Label", font=("Helvetica", size, "bold"))
         
         # Update labels & Checkbuttons
@@ -1504,14 +1518,15 @@ class SplicingGUI:
         self.bookmark_canvas.delete("all")
         dot_w = 40  
         dot_h = 40
-        gap = 10 # Slightly more gap for 50+ images layout
-        cols = 8 
+        gap = 10 
         
-        # v1.5.2: Center the grid if there's enough space
+        # Dynamic Columns based on canvas width
         canvas_w = self.bookmark_canvas.winfo_width()
-        if canvas_w < 100: canvas_w = 400
-        grid_width = (cols * dot_w) + ((cols - 1) * gap)
-        start_offset_x = 10 # Start from left
+        if canvas_w < 100: canvas_w = 400 # Initial fallback
+        
+        cols = max(1, (canvas_w - 20) // (dot_w + gap))
+        
+        start_offset_x = 10 
         for i, path in enumerate(self.batch_files):
             color = "#444444" # Unprocessed
             if path in self.analysis_history:
@@ -1538,7 +1553,7 @@ class SplicingGUI:
             
             # Interaction Bindings
             self.bookmark_canvas.tag_bind(tag_name, "<Button-1>", lambda e, idx=i: self.jump_to_image(idx))
-            self.bookmark_canvas.tag_bind(tag_name, "<Enter>", lambda e, idx=i: self.bookmark_hover_enter(idx))
+            self.bookmark_canvas.tag_bind(tag_name, "<Enter>", lambda e, idx=i: [self.bookmark_hover_enter(idx), self.bookmark_canvas.config(cursor="hand2")])
             self.bookmark_canvas.tag_bind(tag_name, "<Leave>", lambda e: self.bookmark_canvas.config(cursor=""))
         
         # Dynamic Scroll Region
